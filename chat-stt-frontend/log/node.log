@@ -1,0 +1,15 @@
+静态文件服务器运行在 http://localhost:8002
+静态文件目录: /home/bygpu/Documents/chat-stt-frontend/static
+
+推荐文件结构:
+├── server.js（当前文件）
+└── static/（静态资源目录）
+    ├── index.html（首页）
+    ├── css/style.css（样式文件）
+    └── js/script.js（脚本文件）
+[2025-08-30T15:01:19.675Z] GET /chat_frontend.html
+[2025-08-30T15:01:22.111Z] GET /config/total_config.yml
+[2025-08-30T15:01:24.019Z] GET /content.css.map
+[2025-08-30T15:01:24.110Z] GET /sidebar.css.map
+[2025-08-30T15:01:39.789Z] GET /content.css.map
+[2025-08-30T15:01:39.876Z] GET /sidebar.css.map

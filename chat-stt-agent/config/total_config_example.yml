@@ -1,0 +1,6 @@
+name: AI语音助手
+version: 1.0.0
+author: developer
+apiToken: sk-xxx
+API_BASE: https:xxx
+dify_voice_apikey: xxx

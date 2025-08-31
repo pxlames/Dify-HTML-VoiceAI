@@ -1,4 +1,4 @@
-// 小爱同学语音助手 JavaScript 实现
+// 小普同学语音助手 JavaScript 实现
 
 /**
  * 同步读取YAML文件并加载到Map中
@@ -55,7 +55,7 @@ function initConfigSync() {
     // 初始化CONFIG
     CONFIG = {
         API_BASE: apiBase,
-        WAKE_WORDS: ['小爱同学', '小爱', '同学'],
+        WAKE_WORDS: ['你好小普同学', '小普同学', '小普小普', '你可以听见我说话吗'],
         RECORDING_TIMEOUT: 5000,
         SILENCE_THRESHOLD: 0.01,
         SILENCE_DURATION: 2000,
@@ -119,7 +119,7 @@ function initializeTTS() {
         state.ttsService.setCallbacks({
             onStart: (text) => {
                 console.log('TTS开始播放:', text);
-                updateStatus('小爱正在说话...', 'speaking');
+                updateStatus('小普正在说话...', 'speaking');
             },
             onEnd: () => {
                 console.log('TTS播放完成');
@@ -340,10 +340,10 @@ window.clearConversation = function() {
         <div class="message assistant">
             <div class="message-header">
                 <span class="icon">🤖</span>
-                <span>小爱同学</span>
+                <span>小普同学</span>
             </div>
             <div class="message-content">
-                对话已清空。请说"小爱同学"来唤醒我，然后告诉我你需要什么帮助。
+                对话已清空。请说"小普同学"来唤醒我，然后告诉我你需要什么帮助。
             </div>
             <div class="message-time">${new Date().toLocaleTimeString()}</div>
         </div>
@@ -438,7 +438,7 @@ function detectWakeWord() {
                                         
                                         // 模糊匹配
                                         if (!wakeWordFound) {
-                                            const fuzzyMatches = ['小爱同学', '小爱', '晓爱', '小ai', 'xiaoai', '同学', '童学', 'tongxue'];
+                                            const fuzzyMatches = ['小普同学', '小普', '晓普', '小ai', 'xiaoai', '同学', '童学', 'tongxue'];
                                             for (const fuzzyWord of fuzzyMatches) {
                                                 if (normalizedText.includes(fuzzyWord)) {
                                                     wakeWordFound = true;
@@ -490,7 +490,7 @@ function detectWakeWord() {
 // 唤醒词被检测到
 function onWakeWordDetected() {
     console.log('检测到唤醒词');
-    updateStatus('小爱被唤醒了！', 'wakened');
+    updateStatus('小普被唤醒了！', 'wakened');
     elements.statusPanel.classList.add('wakened');
     
     // 播放提示音（可选）
@@ -681,7 +681,7 @@ async function callSTTAPI(audioBlob) {
 // 调用对话API
 async function callChatAPI(query) {
     try {
-        updateStatus('小爱正在思考...', 'processing');
+        updateStatus('小普正在思考...', 'processing');
 
         const response = await fetch(`${CONFIG.API_BASE}/chat`, {
             method: 'POST',
@@ -783,7 +783,7 @@ function addMessage(content, type) {
     messageDiv.innerHTML = `
         <div class="message-header">
             <span class="icon">${type === 'user' ? '👤' : '🤖'}</span>
-            <span>${type === 'user' ? '用户' : '小爱同学'}</span>
+            <span>${type === 'user' ? '用户' : '小普同学'}</span>
         </div>
         <div class="message-content">${content}</div>
         <div class="message-time">${new Date().toLocaleTimeString()}</div>
@@ -859,12 +859,12 @@ function updateStatus(text, status) {
 
     const statusDetails = {
         loading: '正在初始化系统组件...',
-        ready: '说"小爱同学"来唤醒我',
+        ready: '说"小普同学"来唤醒我',
         listening: '正在监听唤醒词...',
         wakened: '开始说话吧！',
         recording: '录音中，请保持安静',
         processing: '正在处理您的请求...',
-        speaking: '小爱正在回复中...', // 新增TTS播放状态
+        speaking: '小普正在回复中...', // 新增TTS播放状态
         stopped: '监听已暂停',
     };
     
@@ -926,7 +926,7 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-console.log('小爱同学语音助手已加载');
+console.log('小普同学语音助手已加载');
 
 
 // 添加TTS控制的全局函数

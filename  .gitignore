@@ -1,0 +1,3 @@
+# 排除掉文件
+chat-stt-agent/config/total_config.yml
+chat-stt-frontend/static/config/total_config.yml

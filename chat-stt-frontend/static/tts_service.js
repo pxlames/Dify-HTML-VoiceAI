@@ -11,7 +11,7 @@ class TTSService {
           voice: config.voice || 'female-1',
           enabled: config.enabled !== false, // 默认启用
           timeout: config.timeout || 30000, // 30秒超时
-          speed: 1.5,
+          speed: 2.5,
           ...config
       };
       

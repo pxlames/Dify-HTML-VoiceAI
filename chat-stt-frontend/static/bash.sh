@@ -24,4 +24,4 @@ PROJECT_DIR="/home/bygpu/Documents/chat-stt-frontend"
 
 # 执行命令
 cd "$PROJECT_DIR"
-# nohup node "$PROJECT_DIR/node_front_server.js" > "$PROJECT_DIR/log/node.log" 2>&1 &
+nohup node "$PROJECT_DIR/node_front_server.js" > "$PROJECT_DIR/log/node.log" 2>&1 &

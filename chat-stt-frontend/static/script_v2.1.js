@@ -56,7 +56,7 @@ function initConfigSync() {
     CONFIG = {
         API_BASE: apiBase,
         WAKE_WORDS: ['你好小普同学', '小普同学', '小普小普', '你可以听见我说话吗'],
-        RECORDING_TIMEOUT: 10000, // 录音最大时长限制，10秒后无条件强制停止录音（防止录音无限持续）
+        RECORDING_TIMEOUT: 10000, // 这意味着录音开始后，如果超过5秒用户还没有说完（或者没有被静默检测到），录音会自动停止。
         SILENCE_THRESHOLD: 0.01, //  volume 是一个在 0.0 (完全静音) 到 1.0 (最大音量) 之间的小数。
         SILENCE_DURATION: 2000,
         TTS: {
@@ -88,11 +88,8 @@ let state = {
     animationId: null,
     // 添加TTS服务引用
     ttsService: null,
-    // 音频缓冲区相关
-    continuousRecorder: null,
-    audioBuffer: [],
-    bufferStartTime: 0,
-    isWakeWordDetecting: false,
+    // 用于唤醒词检测的音频缓冲区
+    wakeWordAudioChunks: [],
 };
 
 // DOM 元素缓存
@@ -312,10 +309,7 @@ function startListening() {
     // 开始音频可视化
     startAudioVisualization();
     
-    // 开始连续录音缓冲
-    startContinuousRecording();
-    
-    // 监听唤醒词
+    // 监听唤醒词（简化版本，实际项目中可使用更复杂的语音检测）
     detectWakeWord();
 
     console.log('开始监听唤醒词');
@@ -329,9 +323,6 @@ function stopListening() {
     
     // 停止音频可视化
     stopAudioVisualization();
-    
-    // 停止连续录音缓冲
-    stopContinuousRecording();
 
     console.log('停止监听');
 }
@@ -362,74 +353,6 @@ window.clearConversation = function() {
     state.conversationId = '';
 };
 
-// 开始连续录音缓冲
-function startContinuousRecording() {
-    if (state.continuousRecorder || !state.isListening) return;
-    
-    navigator.mediaDevices.getUserMedia({ 
-        audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            channelCount: 1,
-            sampleRate: 16000
-        } 
-    }).then(stream => {
-        state.continuousRecorder = new MediaRecorder(stream, {
-            mimeType: 'audio/webm;codecs=opus'
-        });
-        
-        state.continuousRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                // 添加时间戳到音频块
-                state.audioBuffer.push({
-                    data: event.data,
-                    timestamp: Date.now()
-                });
-                
-                // 保持缓冲区在合理大小（只保留最近10秒的数据）
-                const now = Date.now();
-                state.audioBuffer = state.audioBuffer.filter(chunk => 
-                    now - chunk.timestamp < 10000
-                );
-            }
-        };
-        
-        state.continuousRecorder.onerror = (error) => {
-            console.error('连续录音错误:', error);
-        };
-        
-        // 开始连续录音，每100ms产生一个数据块
-        state.continuousRecorder.start(100);
-        console.log('开始连续录音缓冲');
-        
-    }).catch(error => {
-        console.error('启动连续录音失败:', error);
-    });
-}
-
-// 停止连续录音缓冲
-function stopContinuousRecording() {
-    if (state.continuousRecorder) {
-        state.continuousRecorder.stop();
-        state.continuousRecorder = null;
-        state.audioBuffer = [];
-        console.log('停止连续录音缓冲');
-    }
-}
-
-// 从缓冲区获取最近N秒的音频
-function getRecentAudio(seconds = 2) {
-    const now = Date.now();
-    const recentChunks = state.audioBuffer.filter(chunk => 
-        now - chunk.timestamp < seconds * 1000
-    );
-    
-    if (recentChunks.length === 0) return null;
-    
-    const audioBlobs = recentChunks.map(chunk => chunk.data);
-    return new Blob(audioBlobs, { type: 'audio/webm' });
-}
-
 // 唤醒词检测 (使用STT接口)
 function detectWakeWord() {
     // 如果不在监听状态或正在播放TTS，则不进行检测
@@ -441,118 +364,142 @@ function detectWakeWord() {
         return;
     }
  
-    // 检测音量阈值，避免在静音时检测
+    // 检测音量阈值，避免在静音时录音
     if (state.analyser) {
         const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
         state.analyser.getByteFrequencyData(dataArray);
         const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
         const volume = average / 255;
         
-        // 只有在有声音时才进行唤醒词检测
-        if (volume > 0.1 && !state.isWakeWordDetecting) {
-            state.isWakeWordDetecting = true;
-            
-            // 从缓冲区获取最近2秒的音频
-            const recentAudio = getRecentAudio(2);
-            
-            if (recentAudio && recentAudio.size > 1000) {
-                checkWakeWordInAudio(recentAudio).then(found => {
-                    state.isWakeWordDetecting = false;
-                    
-                    if (found) {
-                        // 找到唤醒词，停止连续录音，开始正式录音
-                        stopContinuousRecording();
-                        onWakeWordDetected();
-                        return;
-                    }
-                    
-                    // 没找到唤醒词，继续检测
-                    setTimeout(detectWakeWord, 500);
-                }).catch(error => {
-                    state.isWakeWordDetecting = false;
-                    console.error('唤醒词检测失败:', error);
-                    setTimeout(detectWakeWord, 1000);
+        // 只有在有声音时才开始录制检测
+        if (volume > 0.1) {
+            // 创建临时录音进行唤醒词检测
+            navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    channelCount: 1,  // 新增这行
+                    sampleRate: 16000
+                } 
+            }).then(stream => {
+                const tempRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
                 });
                 
-                return;
-            } else {
-                state.isWakeWordDetecting = false;
-            }
+                let tempAudioChunks = [];
+                
+                tempRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        tempAudioChunks.push(event.data);
+                    }
+                };
+                
+                tempRecorder.onstop = async () => {
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    if (tempAudioChunks.length > 0) {
+                        // 【修改】将当前录音块附加到全局缓冲区
+                        state.wakeWordAudioChunks.push(...tempAudioChunks);
+
+                        // 【修改】创建一个从全局缓冲区音频的Blob
+                        const audioBlob = new Blob(state.wakeWordAudioChunks, { type: 'audio/webm' });
+
+                        // 【修改】限制缓冲区大小，防止内存无限增长 (例如，保留约10秒的音频)
+                        // Opus编码每秒大约1-2KB。我们用块数来限制。
+                        const MAX_CHUNKS = 10; // 假设每2秒一次检测，保留最后5次检测的音频
+                        if (state.wakeWordAudioChunks.length > MAX_CHUNKS) {
+                            state.wakeWordAudioChunks = state.wakeWordAudioChunks.slice(state.wakeWordAudioChunks.length - MAX_CHUNKS);
+                        }
+                        
+                        if (audioBlob.size > 1000) {
+                            try {
+                                // 调用STT API
+                                const formData = new FormData();
+                                formData.append('audio', audioBlob, 'wake_audio.webm');
+                                formData.append('language', 'zh');
+                                
+                                const controller = new AbortController();
+                                const timeoutId = setTimeout(() => controller.abort(), 4000);
+                                
+                                const response = await fetch(`${CONFIG.API_BASE}/transcribe`, {
+                                    method: 'POST',
+                                    body: formData,
+                                    signal: controller.signal
+                                });
+                                
+                                clearTimeout(timeoutId);
+                                
+                                if (response.ok) {
+                                    const result = await response.json();
+                                    const transcript = result.text || '';
+                                    
+                                    if (transcript.trim()) {
+                                        console.log('检测到语音:', transcript);
+                                        
+                                        // 检查是否包含唤醒词
+                                        const normalizedText = transcript.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+                                        let wakeWordFound = false;
+                                        
+                                        // 检查配置的唤醒词
+                                        for (const wakeWord of CONFIG.WAKE_WORDS) {
+                                            const normalizedWakeWord = wakeWord.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+                                            if (normalizedText.includes(normalizedWakeWord)) {
+                                                wakeWordFound = true;
+                                                break;
+                                            }
+                                        }
+                                        
+                                        // 模糊匹配
+                                        if (!wakeWordFound) {
+                                            const fuzzyMatches = ['小普同学', '小普', '晓普', '小ai', 'xiaoai', '同学', '童学', 'tongxue'];
+                                            for (const fuzzyWord of fuzzyMatches) {
+                                                if (normalizedText.includes(fuzzyWord)) {
+                                                    wakeWordFound = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        
+                                        if (wakeWordFound) {
+                                            console.log('检测到唤醒词:', transcript);
+                                            state.wakeWordAudioChunks = []; // 【修改】检测到后清空缓冲区
+                                            onWakeWordDetected();
+                                            return;
+                                        }
+                                    }
+                                }
+                            } catch (error) {
+                                if (error.name !== 'AbortError') {
+                                    console.error('唤醒词检测失败:', error);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 继续下一轮检测
+                    setTimeout(detectWakeWord, 1000);
+                };
+                
+                // 录制2秒音频
+                tempRecorder.start();
+                setTimeout(() => {
+                    if (tempRecorder.state === 'recording') {
+                        tempRecorder.stop();
+                    }
+                }, 2000);
+                
+            }).catch(error => {
+                console.error('获取音频流失败:', error);
+                setTimeout(detectWakeWord, 1000);
+            });
+            
+            return;
         }
     }
     
     // 继续监听
     setTimeout(detectWakeWord, 200);
-}
-
-// 检查音频中是否包含唤醒词
-async function checkWakeWordInAudio(audioBlob) {
-    try {
-        // 调用STT API
-        const formData = new FormData();
-        formData.append('audio', audioBlob, 'wake_audio.webm');
-        formData.append('language', 'zh');
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-        
-        const response = await fetch(`${CONFIG.API_BASE}/transcribe`, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (response.ok) {
-            const result = await response.json();
-            const transcript = result.text || '';
-            
-            if (transcript.trim()) {
-                console.log('检测到语音:', transcript);
-                
-                // 检查是否包含唤醒词
-                const normalizedText = transcript.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-                let wakeWordFound = false;
-                
-                // 检查配置的唤醒词
-                for (const wakeWord of CONFIG.WAKE_WORDS) {
-                    const normalizedWakeWord = wakeWord.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-                    if (normalizedText.includes(normalizedWakeWord)) {
-                        wakeWordFound = true;
-                        break;
-                    }
-                }
-                
-                // 模糊匹配 - 只匹配与"小普"相关的词汇
-                if (!wakeWordFound) {
-                    const fuzzyMatches = ['小普同学', '小普', '晓普', '小布同学', '小布', '晓布'];
-                    for (const fuzzyWord of fuzzyMatches) {
-                        if (normalizedText.includes(fuzzyWord)) {
-                            wakeWordFound = true;
-                            break;
-                        }
-                    }
-                }
-                
-                if (wakeWordFound) {
-                    console.log('检测到唤醒词:', transcript);
-                    return true;
-                } else {
-                    console.log('非唤醒词，继续监听:', transcript);
-                }
-            }
-        }
-        
-        return false;
-        
-    } catch (error) {
-        if (error.name !== 'AbortError') {
-            console.error('唤醒词检测失败:', error);
-        }
-        return false;
-    }
-}
+ }
 
 // 唤醒词被检测到
 function onWakeWordDetected() {

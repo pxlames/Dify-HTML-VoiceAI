@@ -56,15 +56,15 @@ function initConfigSync() {
     CONFIG = {
         API_BASE: apiBase,
         WAKE_WORDS: ['你好小普同学', '小普同学', '小普小普', '你可以听见我说话吗'],
-        RECORDING_TIMEOUT: 10000, // 这意味着录音开始后，如果超过5秒用户还没有说完（或者没有被静默检测到），录音会自动停止。
-        SILENCE_THRESHOLD: 0.01, //  volume 是一个在 0.0 (完全静音) 到 1.0 (最大音量) 之间的小数。
+        RECORDING_TIMEOUT: 5000,
+        SILENCE_THRESHOLD: 0.01,
         SILENCE_DURATION: 2000,
         TTS: {
             apiToken: apiToken,
             voice: 'fnlp/MOSS-TTSD-v0.5:anna',
             enabled: true,
             timeout: 30000,
-            speed: 2.5
+            speed: 1.5
         }
     };
     

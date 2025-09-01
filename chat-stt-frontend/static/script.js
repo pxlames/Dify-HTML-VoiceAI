@@ -55,11 +55,14 @@ function initConfigSync() {
     // 初始化CONFIG
     CONFIG = {
         API_BASE: apiBase,
-        WAKE_WORDS: ['你好小普同学', '小普同学', '小普小普', '你可以听见我说话吗'],
-        RECORDING_TIMEOUT: 10000, // 录音最大时长限制，10秒后无条件强制停止录音（防止录音无限持续）
+        RECORDING_TIMEOUT: 10000, // 这意味着录音开始后，如果超过5秒用户还没有说完（或者没有被静默检测到），录音会自动停止。
         SILENCE_THRESHOLD: 0.01, //  volume 是一个在 0.0 (完全静音) 到 1.0 (最大音量) 之间的小数。
         SILENCE_DURATION: 2000,
-        TTS: {
+        VOICE_DETECTION_THRESHOLD: 0.08, // 声音检测阈值降低以提高敏感度
+        QUESTION_DELAY: 2000, // 2秒无声后询问
+        VOICE_DETECTION_INTERVAL: 10, // 声音检测间隔（毫秒）
+        VOICE_START_DELAY: 100, // 检测到声音后多久开始录音（毫秒）
+        TTS: {  
             apiToken: apiToken,
             voice: 'fnlp/MOSS-TTSD-v0.5:anna',
             enabled: true,
@@ -71,6 +74,79 @@ function initConfigSync() {
     console.log('CONFIG初始化完成:', CONFIG);
 }
 
+
+// 音频队列缓冲类
+class AudioBuffer {
+    constructor(bufferDuration = 3000) {
+        this.bufferDuration = bufferDuration; // 3秒缓冲
+        this.buffer = [];
+        this.isRecording = false;
+        this.stream = null;
+        this.processor = null;
+    }
+
+    initialize(audioContext, stream) {
+        this.stream = stream;
+        const source = audioContext.createMediaStreamSource(stream);
+        
+        // 创建ScriptProcessor来实时采集音频数据
+        this.processor = audioContext.createScriptProcessor(4096, 1, 1);
+        source.connect(this.processor);
+        this.processor.connect(audioContext.destination);
+        
+        this.processor.onaudioprocess = (event) => {
+            if (!this.isRecording) {
+                // 即使不在录音状态，也要维护缓冲
+                this.addToBuffer(event.inputBuffer);
+                this.trimBuffer();
+            }
+        };
+    }
+
+    addToBuffer(audioBuffer) {
+        const channelData = audioBuffer.getChannelData(0);
+        const data = new Float32Array(channelData);
+        
+        this.buffer.push({
+            data: data,
+            timestamp: Date.now()
+        });
+    }
+
+    trimBuffer() {
+        const cutoffTime = Date.now() - this.bufferDuration;
+        this.buffer = this.buffer.filter(item => item.timestamp > cutoffTime);
+    }
+
+    getBufferedAudio(fromTimestamp) {
+        // 获取从指定时间戳开始的缓冲音频
+        return this.buffer.filter(item => item.timestamp >= fromTimestamp);
+    }
+
+    startRecording(fromTimestamp = null) {
+        this.isRecording = true;
+        
+        // 如果指定了开始时间戳，从缓冲中获取之前的音频
+        if (fromTimestamp) {
+            const bufferedData = this.getBufferedAudio(fromTimestamp);
+            return bufferedData;
+        }
+        return [];
+    }
+
+    stopRecording() {
+        this.isRecording = false;
+        return [...this.buffer]; // 返回当前所有缓冲数据
+    }
+
+    destroy() {
+        if (this.processor) {
+            this.processor.disconnect();
+            this.processor = null;
+        }
+        this.buffer = [];
+    }
+}
 
 // 全局状态
 let state = {
@@ -88,11 +164,19 @@ let state = {
     animationId: null,
     // 添加TTS服务引用
     ttsService: null,
-    // 音频缓冲区相关
-    continuousRecorder: null,
-    audioBuffer: [],
-    bufferStartTime: 0,
-    isWakeWordDetecting: false,
+    // 连续监听相关状态
+    continuousMonitoring: false,
+    voiceDetectionTimer: null,
+    questionTimer: null,
+    lastVoiceTime: 0,
+    // 音频队列缓冲
+    audioBuffer: null,
+    voiceStartTime: null,
+    // 中断控制
+    shouldInterrupt: false,
+    isInterrupted: false,  // 标记当前会话是否被中断
+    currentStreamReader: null,  // 当前流式读取器引用
+    interruptTimestamp: 0  // 中断时间戳
 };
 
 // DOM 元素缓存
@@ -123,22 +207,55 @@ function initializeTTS() {
         // 设置TTS回调函数
         state.ttsService.setCallbacks({
             onStart: (text) => {
-                console.log('TTS开始播放:', text);
-                updateStatus('小普正在说话...', 'speaking');
+                console.log('🔊 TTS开始播放:', text);
+                
+                // 检查是否在开始播放前就被中断
+                if (state.isInterrupted || state.shouldInterrupt) {
+                    console.log('🚨 TTS在开始播放时发现已被中断，立即停止');
+                    if (state.ttsService) {
+                        state.ttsService.stop();
+                    }
+                    return;
+                }
+                
+                updateStatus('🔊 小普正在说话... (说话或按ESC可中断)', 'speaking');
+                state.shouldInterrupt = false; // 重置中断标志
+                state.isInterrupted = false;   // 重置中断状态
+                console.log('TTS播放开始，现在可以通过声音中断');
             },
             onEnd: () => {
-                console.log('TTS播放完成');
-                // 恢复监听状态
-                if (state.isListening) {
-                    updateStatus('监听中...', 'listening');
-                    detectWakeWord(); // 继续监听
+                console.log('✅ TTS播放完成');
+                
+                // 清理中断标志
+                state.shouldInterrupt = false;
+                state.isInterrupted = false;
+                
+                // 恢复连续监听状态（只有在未被中断的情况下）
+                if (state.continuousMonitoring) {
+                    updateStatus('连续监听中...', 'listening');
+                    // 连续监听会自动继续
                 } else {
                     updateStatus('准备就绪', 'ready');
                 }
             },
             onError: (error) => {
-                console.error('TTS播放错误:', error);
-                showError('语音播放失败: ' + error.message);
+                console.error('❌ TTS播放错误:', error);
+                
+                // 清理中断标志
+                state.shouldInterrupt = false;
+                state.isInterrupted = false;
+                
+                // 区分是错误还是中断
+                if (error.message && error.message.includes('中断')) {
+                    console.log('🚨 TTS被中断');
+                } else {
+                    showError('语音播放失败: ' + error.message);
+                }
+                
+                // 错误时也要恢复监听
+                if (state.continuousMonitoring) {
+                    updateStatus('连续监听中...', 'listening');
+                }
             },
             onProgress: (progress) => {
                 // 可选：显示播放进度
@@ -234,6 +351,10 @@ async function initializeAudio() {
         const source = state.audioContext.createMediaStreamSource(stream);
         source.connect(state.analyser);
 
+        // 初始化音频缓冲
+        state.audioBuffer = new AudioBuffer();
+        state.audioBuffer.initialize(state.audioContext, stream);
+
         // 配置分析器
         state.analyser.fftSize = 256;
         state.analyser.smoothingTimeConstant = 0.8;
@@ -266,10 +387,10 @@ async function initializeAudio() {
         console.log('使用音频格式:', selectedMimeType || 'default');
 
         setupMediaRecorder();
-        startListening();
+        startContinuousMonitoring();
 
-        updateStatus('准备就绪', 'ready');
-        console.log('音频初始化成功');
+        updateStatus('连续监听中...', 'listening');
+        console.log('音频初始化成功，开始连续监听');
     } catch (error) {
         console.error('音频初始化失败:', error);
         showError('音频设备初始化失败: ' + error.message);
@@ -301,28 +422,27 @@ function setupMediaRecorder() {
     };
 }
 
-// 开始监听唤醒词
-function startListening() {
-    if (!state.micPermissionGranted || state.isListening) return;
+// 开始连续监听
+function startContinuousMonitoring() {
+    if (!state.micPermissionGranted || state.continuousMonitoring) return;
 
+    state.continuousMonitoring = true;
     state.isListening = true;
-    updateStatus('监听中...', 'listening');
+    updateStatus('连续监听中...', 'listening');
     updateToggleButton(true);
     
     // 开始音频可视化
     startAudioVisualization();
     
-    // 开始连续录音缓冲
-    startContinuousRecording();
-    
-    // 监听唤醒词
-    detectWakeWord();
+    // 开始连续声音检测
+    startVoiceDetection();
 
-    console.log('开始监听唤醒词');
+    console.log('开始连续声音监听');
 }
 
-// 停止监听
-function stopListening() {
+// 停止连续监听
+function stopContinuousMonitoring() {
+    state.continuousMonitoring = false;
     state.isListening = false;
     updateStatus('已停止监听', 'stopped');
     updateToggleButton(false);
@@ -330,18 +450,79 @@ function stopListening() {
     // 停止音频可视化
     stopAudioVisualization();
     
-    // 停止连续录音缓冲
-    stopContinuousRecording();
+    // 清理定时器
+    if (state.voiceDetectionTimer) {
+        clearTimeout(state.voiceDetectionTimer);
+        state.voiceDetectionTimer = null;
+    }
+    if (state.questionTimer) {
+        clearTimeout(state.questionTimer);
+        state.questionTimer = null;
+    }
 
-    console.log('停止监听');
+    console.log('停止连续监听');
 }
 
 // 切换监听状态 (全局函数，供HTML调用)
 window.toggleListening = function() {
-    if (state.isListening) {
-        stopListening();
+    if (state.continuousMonitoring) {
+        stopContinuousMonitoring();
     } else {
-        startListening();
+        startContinuousMonitoring();
+    }
+};
+
+// 全局中断函数 - 中断所有当前进程
+function executeGlobalInterrupt() {
+    console.log('🚨 执行全局中断...');
+    
+    // 设置中断状态
+    state.isInterrupted = true;
+    state.shouldInterrupt = false;
+    
+    // 1. 中断流式响应读取
+    if (state.currentStreamReader) {
+        try {
+            console.log('中断流式响应读取...');
+            state.currentStreamReader.cancel();
+            state.currentStreamReader = null;
+        } catch (error) {
+            console.warn('中断流式读取失败:', error);
+        }
+    }
+    
+    // 2. 停止TTS播放
+    if (state.ttsService && state.ttsService.isSpeaking()) {
+        console.log('停止TTS播放...');
+        state.ttsService.stop();
+    }
+    
+    // 3. 重置状态
+    state.isProcessing = false;
+    elements.statusPanel.classList.remove('processing', 'active');
+    
+    // 4. 更新状态显示
+    updateStatus('ℹ️ 已中断当前回答，连续监听中...', 'listening');
+    
+    // 5. 如果还在检测到声音，开始新的录音
+    setTimeout(() => {
+        state.isInterrupted = false;  // 重置中断标志
+        // 检查是否还在检测到声音，如果是则开始录音
+        if (state.lastVolume > CONFIG.VOICE_DETECTION_THRESHOLD && !state.isRecording) {
+            console.log('中断后检测到持续声音，开始新录音...');
+            startRecording();
+        }
+    }, 100);
+    
+    console.log('✅ 全局中断完成');
+}
+
+// 手动中断功能 (全局函数，供HTML调用)
+window.interruptTTS = function() {
+    if (state.isProcessing || (state.ttsService && state.ttsService.isSpeaking())) {
+        state.shouldInterrupt = true;
+        executeGlobalInterrupt();
+        console.log('手动触发中断');
     }
 };
 
@@ -354,7 +535,7 @@ window.clearConversation = function() {
                 <span>小普同学</span>
             </div>
             <div class="message-content">
-                对话已清空。请说"小普同学"来唤醒我，然后告诉我你需要什么帮助。
+                对话已清空。现在处于连续监听模式，检测到声音时会自动开始录音。
             </div>
             <div class="message-time">${new Date().toLocaleTimeString()}</div>
         </div>
@@ -362,209 +543,119 @@ window.clearConversation = function() {
     state.conversationId = '';
 };
 
-// 开始连续录音缓冲
-function startContinuousRecording() {
-    if (state.continuousRecorder || !state.isListening) return;
+// 连续声音检测 - 优化版本
+function startVoiceDetection() {
+    if (!state.continuousMonitoring || !state.analyser) return;
     
-    navigator.mediaDevices.getUserMedia({ 
-        audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            channelCount: 1,
-            sampleRate: 16000
-        } 
-    }).then(stream => {
-        state.continuousRecorder = new MediaRecorder(stream, {
-            mimeType: 'audio/webm;codecs=opus'
-        });
-        
-        state.continuousRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                // 添加时间戳到音频块
-                state.audioBuffer.push({
-                    data: event.data,
-                    timestamp: Date.now()
-                });
-                
-                // 保持缓冲区在合理大小（只保留最近10秒的数据）
-                const now = Date.now();
-                state.audioBuffer = state.audioBuffer.filter(chunk => 
-                    now - chunk.timestamp < 10000
-                );
-            }
-        };
-        
-        state.continuousRecorder.onerror = (error) => {
-            console.error('连续录音错误:', error);
-        };
-        
-        // 开始连续录音，每100ms产生一个数据块
-        state.continuousRecorder.start(100);
-        console.log('开始连续录音缓冲');
-        
-    }).catch(error => {
-        console.error('启动连续录音失败:', error);
-    });
-}
-
-// 停止连续录音缓冲
-function stopContinuousRecording() {
-    if (state.continuousRecorder) {
-        state.continuousRecorder.stop();
-        state.continuousRecorder = null;
-        state.audioBuffer = [];
-        console.log('停止连续录音缓冲');
-    }
-}
-
-// 从缓冲区获取最近N秒的音频
-function getRecentAudio(seconds = 2) {
-    const now = Date.now();
-    const recentChunks = state.audioBuffer.filter(chunk => 
-        now - chunk.timestamp < seconds * 1000
-    );
+    let consecutiveVoiceFrames = 0;
+    let consecutiveSilenceFrames = 0;
+    const VOICE_CONFIRM_FRAMES = 3; // 连续3帧检测到声音才确认
+    const SILENCE_CONFIRM_FRAMES = Math.ceil(CONFIG.QUESTION_DELAY / CONFIG.VOICE_DETECTION_INTERVAL); // 2秒静音帧数
     
-    if (recentChunks.length === 0) return null;
-    
-    const audioBlobs = recentChunks.map(chunk => chunk.data);
-    return new Blob(audioBlobs, { type: 'audio/webm' });
-}
-
-// 唤醒词检测 (使用STT接口)
-function detectWakeWord() {
-    // 如果不在监听状态或正在播放TTS，则不进行检测
-    if (!state.isListening || (state.ttsService && state.ttsService.isSpeaking())) {
-        // 如果在播放TTS，等待播放完成后再继续检测
-        if (state.ttsService && state.ttsService.isSpeaking()) {
-            setTimeout(detectWakeWord, 1000);
-        }
-        return;
-    }
- 
-    // 检测音量阈值，避免在静音时检测
-    if (state.analyser) {
+    const checkVoiceLevel = () => {
+        if (!state.continuousMonitoring) return;
+        
+        // 获取音频数据 - 无论是否在播放TTS都要检测
         const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
         state.analyser.getByteFrequencyData(dataArray);
         const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
         const volume = average / 255;
         
-        // 只有在有声音时才进行唤醒词检测
-        if (volume > 0.1 && !state.isWakeWordDetecting) {
-            state.isWakeWordDetecting = true;
+        // 检查是否需要中断当前进程
+        if (state.shouldInterrupt && (state.isProcessing || (state.ttsService && state.ttsService.isSpeaking()))) {
+            console.log('🚨 执行全局中断...', {
+                shouldInterrupt: state.shouldInterrupt,
+                isProcessing: state.isProcessing,
+                isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false
+            });
             
-            // 从缓冲区获取最近2秒的音频
-            const recentAudio = getRecentAudio(2);
-            
-            if (recentAudio && recentAudio.size > 1000) {
-                checkWakeWordInAudio(recentAudio).then(found => {
-                    state.isWakeWordDetecting = false;
-                    
-                    if (found) {
-                        // 找到唤醒词，停止连续录音，开始正式录音
-                        stopContinuousRecording();
-                        onWakeWordDetected();
-                        return;
-                    }
-                    
-                    // 没找到唤醒词，继续检测
-                    setTimeout(detectWakeWord, 500);
-                }).catch(error => {
-                    state.isWakeWordDetecting = false;
-                    console.error('唤醒词检测失败:', error);
-                    setTimeout(detectWakeWord, 1000);
-                });
-                
-                return;
-            } else {
-                state.isWakeWordDetecting = false;
-            }
+            // 执行全局中断
+            executeGlobalInterrupt();
         }
-    }
-    
-    // 继续监听
-    setTimeout(detectWakeWord, 200);
-}
-
-// 检查音频中是否包含唤醒词
-async function checkWakeWordInAudio(audioBlob) {
-    try {
-        // 调用STT API
-        const formData = new FormData();
-        formData.append('audio', audioBlob, 'wake_audio.webm');
-        formData.append('language', 'zh');
         
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-        
-        const response = await fetch(`${CONFIG.API_BASE}/transcribe`, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (response.ok) {
-            const result = await response.json();
-            const transcript = result.text || '';
+        // 声音检测逻辑
+        if (volume > CONFIG.VOICE_DETECTION_THRESHOLD) {
+            consecutiveVoiceFrames++;
+            consecutiveSilenceFrames = 0;
             
-            if (transcript.trim()) {
-                console.log('检测到语音:', transcript);
-                
-                // 检查是否包含唤醒词
-                const normalizedText = transcript.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-                let wakeWordFound = false;
-                
-                // 检查配置的唤醒词
-                for (const wakeWord of CONFIG.WAKE_WORDS) {
-                    const normalizedWakeWord = wakeWord.toLowerCase().replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-                    if (normalizedText.includes(normalizedWakeWord)) {
-                        wakeWordFound = true;
-                        break;
-                    }
+            // 第一次检测到声音时记录时间和检查中断
+            if (consecutiveVoiceFrames === 1) {
+                if (!state.voiceStartTime) {
+                    state.voiceStartTime = Date.now();
+                    console.log('检测到声音开始...');
                 }
                 
-                // 模糊匹配 - 只匹配与"小普"相关的词汇
-                if (!wakeWordFound) {
-                    const fuzzyMatches = ['小普同学', '小普', '晓普', '小布同学', '小布', '晓布'];
-                    for (const fuzzyWord of fuzzyMatches) {
-                        if (normalizedText.includes(fuzzyWord)) {
-                            wakeWordFound = true;
-                            break;
-                        }
-                    }
+                // 如果当前在处理请求或TTS播放，设置中断标志
+                if (state.isProcessing || (state.ttsService && state.ttsService.isSpeaking())) {
+                    state.shouldInterrupt = true;
+                    state.interruptTimestamp = Date.now();
+                    console.log('🎤 检测到声音，准备中断当前进程...', {
+                        volume: volume.toFixed(3),
+                        threshold: CONFIG.VOICE_DETECTION_THRESHOLD,
+                        isProcessing: state.isProcessing,
+                        isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
+                        consecutiveFrames: consecutiveVoiceFrames
+                    });
                 }
-                
-                if (wakeWordFound) {
-                    console.log('检测到唤醒词:', transcript);
-                    return true;
-                } else {
-                    console.log('非唤醒词，继续监听:', transcript);
+            }
+            
+            // 连续检测到足够声音帧后开始录音（即使TTS在播放也可以录音）
+            if (consecutiveVoiceFrames >= VOICE_CONFIRM_FRAMES && !state.isRecording && !state.isProcessing) {
+                console.log('确认声音输入，开始录音');
+                // 如果TTS正在播放，先停止它
+                if (state.ttsService && state.ttsService.isSpeaking()) {
+                    state.ttsService.stop();
+                    console.log('停止TTS播放以开始录音');
                 }
+                startRecording();
+            }
+            
+            state.lastVoiceTime = Date.now();
+        } else {
+            consecutiveSilenceFrames++;
+            consecutiveVoiceFrames = 0;
+            
+            // 如果之前检测到了声音但现在静音，重置声音开始时间
+            if (state.voiceStartTime && !state.isRecording) {
+                state.voiceStartTime = null;
+            }
+            
+            // 如果当前在录音中且连续静音超过阈值，停止录音
+            if (state.isRecording && consecutiveSilenceFrames >= SILENCE_CONFIRM_FRAMES) {
+                console.log('2秒无声确认，停止录音');
+                stopRecording();
+                consecutiveSilenceFrames = 0;
             }
         }
         
-        return false;
+        state.lastVolume = volume;
         
-    } catch (error) {
-        if (error.name !== 'AbortError') {
-            console.error('唤醒词检测失败:', error);
+        // 调试信息 - 每100次检测输出一次状态
+        if (Math.random() < 0.01) { // 约1%的概率输出
+            console.log('声音检测状态:', {
+                volume: volume.toFixed(3),
+                threshold: CONFIG.VOICE_DETECTION_THRESHOLD,
+                consecutiveVoice: consecutiveVoiceFrames,
+                consecutiveSilence: consecutiveSilenceFrames,
+                isRecording: state.isRecording,
+                isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
+                shouldInterrupt: state.shouldInterrupt
+            });
         }
-        return false;
-    }
+        
+        setTimeout(checkVoiceLevel, CONFIG.VOICE_DETECTION_INTERVAL);
+    };
+    
+    checkVoiceLevel();
 }
 
-// 唤醒词被检测到
-function onWakeWordDetected() {
-    console.log('检测到唤醒词');
-    updateStatus('小普被唤醒了！', 'wakened');
-    elements.statusPanel.classList.add('wakened');
+// 语音被检测到时的处理
+function onVoiceDetected() {
+    console.log('检测到语音输入');
+    updateStatus('检测到语音，开始录音...', 'recording');
     
-    // 播放提示音（可选）
-    playNotificationSound();
-    
-    // 开始录音
-    setTimeout(startRecording, 500);
+    // 可选：播放提示音
+    // playNotificationSound();
 }
 
 // 播放提示音
@@ -587,59 +678,73 @@ function playNotificationSound() {
     }
 }
 
-// 开始录音
+// 开始录音 - 优化版本
 function startRecording() {
     if (state.isRecording || !state.mediaRecorder) return;
 
     try {
-        state.isRecording = true;
-        state.mediaRecorder.start();
+        // 从缓冲中获取之前的音频数据（如果有的话）
+        let bufferedData = [];
+        if (state.audioBuffer && state.voiceStartTime) {
+            bufferedData = state.audioBuffer.startRecording(state.voiceStartTime);
+            console.log(`从缓冲获取了 ${bufferedData.length} 帧音频数据`);
+        }
         
-        updateStatus('请说话...', 'recording');
+        state.isRecording = true;
+        state.mediaRecorder.start(100); // 使用100ms的时间片段以获得更好的实时性
+        
+        updateStatus('正在录音...', 'recording');
         elements.statusPanel.classList.remove('wakened');
         elements.statusPanel.classList.add('active');
 
         // 设置录音超时
         state.recordingTimer = setTimeout(() => {
             if (state.isRecording) {
+                console.log('录音超时，自动停止');
                 stopRecording();
             }
         }, CONFIG.RECORDING_TIMEOUT);
 
-        // 监听静默
-        startSilenceDetection();
-
-        console.log('开始录音');
+        console.log('开始录音（含缓冲数据）');
     } catch (error) {
         console.error('录音启动失败:', error);
         showError('录音启动失败');
         state.isRecording = false;
+        state.voiceStartTime = null;
     }
 }
 
-// 停止录音
+// 停止录音 - 优化版本
 function stopRecording() {
     if (!state.isRecording) return;
 
     state.isRecording = false;
     
     try {
+        // 停止缓冲并获取所有数据
+        let allBufferedData = [];
+        if (state.audioBuffer) {
+            allBufferedData = state.audioBuffer.stopRecording();
+        }
+        
         state.mediaRecorder.stop();
         updateStatus('录音结束，正在处理...', 'processing');
         elements.statusPanel.classList.remove('active');
         elements.statusPanel.classList.add('processing');
 
-        // 清除定时器
+        // 清除定时器和重置状态
         if (state.recordingTimer) {
             clearTimeout(state.recordingTimer);
             state.recordingTimer = null;
         }
+        
+        // 重置声音检测状态
+        state.voiceStartTime = null;
 
-        stopSilenceDetection();
-
-        console.log('停止录音');
+        console.log(`停止录音，共获取 ${allBufferedData.length} 帧缓冲数据`);
     } catch (error) {
         console.error('停止录音失败:', error);
+        state.voiceStartTime = null;
     }
 }
 
@@ -692,15 +797,31 @@ async function processAudio(audioBlob) {
     try {
         state.isProcessing = true;
         updateStatus('正在识别语音...', 'processing');
+        
+        // 检查中断状态
+        if (state.isInterrupted || state.shouldInterrupt) {
+            console.log('🚨 音频处理被中断');
+            return;
+        }
 
         // 调用STT API
         const transcript = await callSTTAPI(audioBlob);
         
         if (transcript.trim()) {
+            // 再次检查中断状态
+            if (state.isInterrupted || state.shouldInterrupt) {
+                console.log('🚨 在STT完成后被中断');
+                return;
+            }
+            
             addMessage(transcript, 'user');
             
-            // 调用对话API
-            await callChatAPI(transcript);
+            // 调用对话API前最后一次检查
+            if (!state.isInterrupted && !state.shouldInterrupt) {
+                await callChatAPI(transcript);
+            } else {
+                console.log('🚨 在调用对话API前被中断');
+            }
         } else {
             updateStatus('未识别到语音内容', 'ready');
             setTimeout(() => {
@@ -717,10 +838,15 @@ async function processAudio(audioBlob) {
         state.isProcessing = false;
         elements.statusPanel.classList.remove('processing');
         
-        if (state.isListening) {
+        // 如果被中断，立即恢复监听状态
+        if (state.isInterrupted || state.shouldInterrupt) {
+            console.log('🔄 音频处理被中断，恢复监听状态');
+            executeGlobalInterrupt();
+        } else if (state.continuousMonitoring) {
             setTimeout(() => {
-                updateStatus('监听中...', 'listening');
-                detectWakeWord(); // 继续监听
+                if (!state.isInterrupted && !state.shouldInterrupt) {
+                    updateStatus('连续监听中...', 'listening');
+                }
             }, 1000);
         }
     }
@@ -782,9 +908,21 @@ async function handleStreamResponse(response) {
     const decoder = new TextDecoder();
     let completeAnswer = '';
     let messageElement = null;
+    
+    // 设置当前流读取器引用，以便可以中断
+    state.currentStreamReader = reader;
 
     try {
         while (true) {
+            // 检查中断标志
+            if (state.isInterrupted || state.shouldInterrupt) {
+                console.log('🚨 流式响应被中断');
+                if (messageElement) {
+                    updateMessageContent(messageElement, completeAnswer + ' [被中断]');
+                }
+                break;
+            }
+            
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -805,25 +943,42 @@ async function handleStreamResponse(response) {
                                 updateMessageContent(messageElement, completeAnswer);
                             }
                         } else if (data.event === 'workflow_finished') {
+                            // 再次检查中断标志
+                            if (state.isInterrupted || state.shouldInterrupt) {
+                                console.log('🚨 在workflow_finished事件处理时被中断');
+                                break;
+                            }
+                            
                             const finalAnswer = data.final_answer || completeAnswer;
                             if (messageElement) {
                                 // 更新消息内容
                                 updateMessageContent(messageElement, finalAnswer);
                                 
-                                // 【核心修改】调用TTS播放语音
-                                if (finalAnswer.trim() && state.ttsService) {
+                                // 【核心修改】TTS播放前再次检查中断
+                                if (finalAnswer.trim() && state.ttsService && !state.isInterrupted && !state.shouldInterrupt) {
                                     try {
+                                        console.log('🔊 开始TTS播放（中断检查通过）');
                                         await state.ttsService.speak(finalAnswer);
                                     } catch (error) {
                                         console.error('TTS播放失败:', error);
                                         // 即使TTS失败也要恢复监听状态
-                                        if (state.isListening) {
-                                            updateStatus('监听中...', 'listening');
-                                            detectWakeWord();
+                                        if (state.continuousMonitoring && !state.isInterrupted) {
+                                            updateStatus('连续监听中...', 'listening');
                                         }
                                     }
                                 } else {
-                                    updateStatus('回答完成', 'ready');
+                                    console.log('跳过TTS播放：', {
+                                        hasAnswer: !!finalAnswer.trim(),
+                                        hasTTSService: !!state.ttsService,
+                                        isInterrupted: state.isInterrupted,
+                                        shouldInterrupt: state.shouldInterrupt
+                                    });
+                                    
+                                    if (state.continuousMonitoring && !state.isInterrupted) {
+                                        updateStatus('连续监听中...', 'listening');
+                                    } else {
+                                        updateStatus('回答完成', 'ready');
+                                    }
                                 }
                             }
                         }
@@ -835,11 +990,17 @@ async function handleStreamResponse(response) {
         }
     } catch (error) {
         console.error('读取流式响应失败:', error);
-        if (messageElement) {
+        if (messageElement && !state.isInterrupted) {
             updateMessageContent(messageElement, '抱歉，回答被中断了。');
         }
     } finally {
-        reader.releaseLock();
+        // 清理流读取器引用
+        state.currentStreamReader = null;
+        try {
+            reader.releaseLock();
+        } catch (e) {
+            // 忽略锁释放错误
+        }
     }
 }
 
@@ -880,7 +1041,7 @@ function startAudioVisualization() {
     canvas.style.display = 'block';
 
     const animate = () => {
-        if (!state.isListening && !state.isRecording) {
+        if (!state.continuousMonitoring && !state.isRecording) {
             canvas.style.display = 'none';
             elements.visualizerPlaceholder.style.display = 'flex';
             return;
@@ -926,12 +1087,11 @@ function updateStatus(text, status) {
 
     const statusDetails = {
         loading: '正在初始化系统组件...',
-        ready: '说"小普同学"来唤醒我',
-        listening: '正在监听唤醒词...',
-        wakened: '开始说话吧！',
-        recording: '录音中，请保持安静',
+        ready: '准备就绪',
+        listening: '连续监听中，检测到声音会自动开始录音...',
+        recording: '录音中，2秒无声后自动提问',
         processing: '正在处理您的请求...',
-        speaking: '小普正在回复中...', // 新增TTS播放状态
+        speaking: '正在播放回答，随时可以说话中断或按ESC键', // 新增TTS播放状态
         stopped: '监听已暂停',
     };
     
@@ -979,7 +1139,6 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 // 页面卸载时清理资源
-// 修改页面卸载事件处理
 window.addEventListener('beforeunload', () => {
     if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
         state.mediaRecorder.stop();
@@ -987,13 +1146,41 @@ window.addEventListener('beforeunload', () => {
     if (state.audioContext) {
         state.audioContext.close();
     }
+    // 清理音频缓冲
+    if (state.audioBuffer) {
+        state.audioBuffer.destroy();
+    }
     // 清理TTS资源
     if (state.ttsService) {
         state.ttsService.destroy();
     }
+    // 清理连续监听定时器
+    if (state.voiceDetectionTimer) {
+        clearTimeout(state.voiceDetectionTimer);
+    }
+    if (state.questionTimer) {
+        clearTimeout(state.questionTimer);
+    }
+});
+
+// 添加键盘快捷键支持
+document.addEventListener('keydown', (event) => {
+    // 按ESC键中断TTS播放
+    if (event.key === 'Escape') {
+        if (state.ttsService && state.ttsService.isSpeaking()) {
+            window.interruptTTS();
+            event.preventDefault();
+        }
+    }
+    // 按空格键切换监听状态
+    if (event.key === ' ' && event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA') {
+        window.toggleListening();
+        event.preventDefault();
+    }
 });
 
 console.log('小普同学语音助手已加载');
+console.log('快捷键说明: ESC中断播放, 空格切换监听');
 
 
 // 添加TTS控制的全局函数
@@ -1013,6 +1200,10 @@ window.toggleTTS = function() {
 window.stopTTS = function() {
     if (state.ttsService) {
         state.ttsService.stop();
+        state.shouldInterrupt = false;
+        if (state.continuousMonitoring) {
+            updateStatus('连续监听中...', 'listening');
+        }
         console.log('TTS播放已停止');
     }
 };
@@ -1023,4 +1214,37 @@ window.setTTSVoice = function(voice) {
         state.ttsService.setConfig({ voice: voice });
         console.log('TTS语音已设置为:', voice);
     }
+};
+
+// 测试TTS中断功能
+window.testTTSInterrupt = function() {
+    if (state.ttsService) {
+        console.log('🎤 开始测试TTS中断功能...');
+        // 播放一段测试文本
+        state.ttsService.speak('这是一段测试语音，你可以通过说话来中断我。现在请尝试说话来测试中断功能。说话阈值设置为' + CONFIG.VOICE_DETECTION_THRESHOLD)
+            .then(() => {
+                console.log('✅ 测试TTS播放完成');
+            })
+            .catch((error) => {
+                console.log('❌ 测试TTS被中断或出错:', error);
+            });
+    } else {
+        console.log('❌ TTS服务未初始化');
+    }
+};
+
+// 获取当前状态信息
+window.getSystemStatus = function() {
+    console.log('🔍 系统状态信息:', {
+        continuousMonitoring: state.continuousMonitoring,
+        isRecording: state.isRecording,
+        isProcessing: state.isProcessing,
+        isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
+        shouldInterrupt: state.shouldInterrupt,
+        isInterrupted: state.isInterrupted,
+        voiceThreshold: CONFIG.VOICE_DETECTION_THRESHOLD,
+        lastVolume: state.lastVolume,
+        hasAudioBuffer: !!state.audioBuffer,
+        hasCurrentStreamReader: !!state.currentStreamReader
+    });
 };

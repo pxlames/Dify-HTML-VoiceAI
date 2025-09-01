@@ -226,7 +226,7 @@ async def transcribe_audio(
     temp_file_path = None
     try:
         # 保存上传文件到临时目录
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
             audio_content = await audio.read()
             temp_file.write(audio_content)
             temp_file_path = temp_file.name

@@ -1,5 +1,5 @@
 静态文件服务器运行在 http://localhost:8002
-静态文件目录: /home/bygpu/Documents/chat-stt-frontend/static
+静态文件目录: /Users/pangxiaolong/project/pythonLearn/Dify-HTML-VoiceAI/chat-stt-frontend/static
 
 推荐文件结构:
 ├── server.js（当前文件）
@@ -7,11 +7,10 @@
     ├── index.html（首页）
     ├── css/style.css（样式文件）
     └── js/script.js（脚本文件）
-[2025-08-31T14:27:50.439Z] GET /chat_frontend.html
-[2025-08-31T14:27:50.544Z] GET /.well-known/appspecific/com.chrome.devtools.json
-[2025-08-31T14:27:50.652Z] GET /tts_service.js
-[2025-08-31T14:27:50.653Z] GET /script.js
-[2025-08-31T14:27:52.346Z] GET /config/total_config.yml
-[2025-08-31T14:27:53.711Z] GET /content.css.map
-[2025-08-31T14:27:53.787Z] GET /sidebar.css.map
-[2025-08-31T14:31:15.470Z] GET /favicon.ico
+[2025-09-01T03:40:54.513Z] GET /chat_frontend.html
+[2025-09-01T03:40:54.899Z] GET /.well-known/appspecific/com.chrome.devtools.json
+[2025-09-01T03:40:54.904Z] GET /script.js
+[2025-09-01T03:40:54.917Z] GET /tts_service.js
+[2025-09-01T03:40:56.054Z] GET /config/total_config.yml
+[2025-09-01T03:40:57.006Z] GET /content.css.map
+[2025-09-01T03:40:57.046Z] GET /sidebar.css.map

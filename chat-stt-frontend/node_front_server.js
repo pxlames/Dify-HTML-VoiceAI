@@ -118,7 +118,7 @@ async function serveStaticFile(res, req, filePath) {
         // 4. 设置基础响应头（MIME、缓存、Last-Modified）
         const mimeType = getMimeType(filePath);
         res.setHeader('Content-Type', mimeType);
-        res.setHeader('Cache-Control', 'public, max-age=3600');
+        
         
         const lastModified = stats.mtime.toUTCString();
         res.setHeader('Last-Modified', lastModified);

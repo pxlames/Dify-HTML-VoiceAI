@@ -78,8 +78,8 @@ function initConfigSync() {
         API_BASE: apiBase, // 后端API的基础URL
         RECORDING_TIMEOUT: 10000, // 最大录音时长（毫秒），防止无限录音
         SILENCE_THRESHOLD: 0.1, // 静音检测的音量阈值 (0.0-1.0)
-        SILENCE_DURATION: 2000, // 判定为静默需要持续的时长（毫秒）
-        VOICE_DETECTION_THRESHOLD: 0.1, // 声音活动检测的音量阈值，用于唤醒或中断
+        SILENCE_DURATION: 1500, // 判定为静默需要持续的时长（毫秒）
+        VOICE_DETECTION_THRESHOLD: 0.2, // 声音活动检测的音量阈值，用于唤醒或中断
         QUESTION_DELAY: 1000, // 检测到声音后，如果持续静音超过此时长，则自动结束录音并提问
         VOICE_DETECTION_INTERVAL: 1, // 声音活动检测的轮询间隔（毫秒）
         VOICE_START_DELAY: 100, // (未使用) 曾用于检测到声音后延迟开始录音
@@ -1077,13 +1077,10 @@ async function handleStreamResponse(response) {
 
     try {
         while (true) {
-            // 在读取每个数据块之前，检查是否需要中断
+            // 在读取每个数据块之前，检查是否需要中断（但不阻止完整回答的接收）
             if (state.isInterrupted || state.shouldInterrupt) {
-                console.log('🚨 流式响应被中断');
-                if (messageElement) {
-                    updateMessageContent(messageElement, completeAnswer + ' [被中断]');
-                }
-                break; // 跳出循环
+                console.log('🚨 检测到中断标志，但继续接收完整回答');
+                // 不再直接break，让回答完整接收后再处理中断
             }
             
             const { done, value } = await reader.read();
@@ -1111,39 +1108,44 @@ async function handleStreamResponse(response) {
                             }
                         } else if (data.event === 'workflow_finished') {
                             // 工作流结束事件，包含最终的完整回答
-                            // 再次检查中断标志
-                            if (state.isInterrupted || state.shouldInterrupt) {
-                                console.log('🚨 在workflow_finished事件处理时被中断');
-                                break;
-                            }
-                            
                             const finalAnswer = data.final_answer || completeAnswer;
                             if (messageElement) {
                                 // 更新消息内容
                                 updateMessageContent(messageElement, finalAnswer);
                                 
-                                // 【核心修改】在回答完全显示后，如果TTS启用且未被中断，则开始播放语音
-                                if (finalAnswer.trim() && state.ttsService && !state.isInterrupted && !state.shouldInterrupt) {
+                                // 【强制TTS播放】无条件播放TTS，移除所有跳过逻辑
+                                if (finalAnswer.trim() && state.ttsService) {
+                                    // 强制重置所有中断标志
+                                    state.isInterrupted = false;
+                                    state.shouldInterrupt = false;
+                                    
+                                    // 强制启用TTS（防止被意外禁用）
+                                    state.ttsService.setEnabled(true);
+                                    
+                                    console.log('🔊 强制开始TTS播放', {
+                                        answer: finalAnswer.substring(0, 50) + '...',
+                                        answerLength: finalAnswer.length
+                                    });
+                                    
                                     try {
-                                        console.log('🔊 开始TTS播放（中断检查通过）');
                                         await state.ttsService.speak(finalAnswer);
+                                        console.log('✅ TTS播放完成');
                                     } catch (error) {
-                                        console.error('TTS播放失败:', error);
-                                        // 即使TTS失败也要恢复监听状态
-                                        if (state.continuousMonitoring && !state.isInterrupted) {
+                                        console.error('❌ TTS播放失败，但这不应该发生:', error);
+                                        // 即使出错也要恢复监听状态
+                                        if (state.continuousMonitoring) {
                                             updateStatus('连续监听中...', 'listening');
                                         }
                                     }
                                 } else {
-                                    // 如果不播放TTS，则根据情况恢复监听或显示准备就绪
-                                    console.log('跳过TTS播放：', {
+                                    // 只有在没有回答内容或TTS服务不存在时才跳过
+                                    console.warn('⚠️ 无法播放TTS:', {
                                         hasAnswer: !!finalAnswer.trim(),
                                         hasTTSService: !!state.ttsService,
-                                        isInterrupted: state.isInterrupted,
-                                        shouldInterrupt: state.shouldInterrupt
+                                        answer: finalAnswer
                                     });
                                     
-                                    if (state.continuousMonitoring && !state.isInterrupted) {
+                                    if (state.continuousMonitoring) {
                                         updateStatus('连续监听中...', 'listening');
                                     } else {
                                         updateStatus('回答完成', 'ready');
@@ -1407,6 +1409,20 @@ window.toggleTTS = function() {
         // 可以在UI上显示TTS状态变化
         const statusText = newState ? 'TTS已启用' : 'TTS已禁用';
         showError(statusText, false); // 复用错误显示功能来显示状态
+    }
+};
+
+/**
+ * 切换音频文件保存功能
+ */
+window.toggleSaveAudio = function() {
+    if (state.ttsService) {
+        const newState = !state.ttsService.config.saveAudioFiles;
+        state.ttsService.setSaveAudioFiles(newState);
+        
+        // 显示状态变化
+        const statusText = newState ? '音频文件保存已启用' : '音频文件保存已禁用';
+        showError(statusText, false);
     }
 };
 

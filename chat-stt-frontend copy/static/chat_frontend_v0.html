@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI聊天助手</title>
+    
+    <!-- 引入依赖库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    
+    <!-- 引入样式和脚本 -->
+    <link rel="stylesheet" href="style_v0.css">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="chat-title">AI智能助手</div>
+            <div class="chat-subtitle">支持文字和语音交互</div>
+            <button class="clear-chat" onclick="clearConversation()" title="清空对话">清空对话</button>
+        </div>
+        
+        <div class="conversation-info">
+            <span>对话ID: <span id="conversationId">等待开始</span></span>
+            <span id="messageCount">消息数: 0</span>
+        </div>
+        
+        <div class="chat-messages" id="chatMessages">
+            <div class="message assistant">
+                <div class="message-content">
+                    你好！我是AI智能助手，可以帮你解答问题、分析数据、生成图表等。你可以通过文字输入或语音输入与我交流。
+                    <div class="timestamp"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status" id="status"></div>
+        
+        <div class="chat-input-container">
+            <div class="chat-input">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="输入你的问题，支持回车发送..." 
+                        maxlength="2000"
+                        rows="1"
+                    ></textarea>
+                </div>
+                <button class="voice-button idle" id="voiceButton" onclick="toggleRecording()" title="语音输入">
+                    <span id="voiceIcon">🎤</span>
+                </button>
+                <button class="send-button" id="sendButton" onclick="sendMessage()" title="发送消息">
+                    ➤
+                </button>
+            </div>
+            <div class="voice-hint" id="voiceHint">点击麦克风开始语音输入，4秒静音后自动发送</div>
+        </div>
+    </div>
+
+    <!-- 引入主要脚本 -->
+    <script src="script_v0.js"></script>
+</body>
+</html>

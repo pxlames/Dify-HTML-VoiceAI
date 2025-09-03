@@ -9,9 +9,10 @@ class TTSService {
           apiUrl: 'https://api.siliconflow.cn/v1/audio/speech',
           model: 'fnlp/MOSS-TTSD-v0.5',
           voice: config.voice || 'female-1',
-          enabled: config.enabled !== false, // 默认启用
+          enabled: config.enabled !== true, // 默认启用
           timeout: config.timeout || 30000, // 30秒超时
           speed: 2.5,
+          saveAudioFiles: config.saveAudioFiles !== true, // 默认保存音频文件
           ...config
       };
       
@@ -30,6 +31,9 @@ class TTSService {
           onProgress: null
       };
 
+      // 移动端自动解锁音频
+      this._setupMobileAudioUnlock();
+      
       console.log('TTS服务初始化完成');
   }
 
@@ -61,6 +65,15 @@ class TTSService {
   }
 
   /**
+   * 启用/禁用音频文件保存
+   * @param {boolean} enabled 是否启用音频文件保存
+   */
+  setSaveAudioFiles(enabled) {
+      this.config.saveAudioFiles = enabled;
+      console.log('音频文件保存功能:', enabled ? '已启用' : '已禁用');
+  }
+
+  /**
    * 检查是否正在播放
    * @returns {boolean}
    */
@@ -88,6 +101,12 @@ class TTSService {
       if (!this.config.apiToken) {
           throw new Error('TTS API Token 未配置');
       }
+      
+      // 移动端预先检查音频解锁状态
+      if (this._isMobileDevice() && !this.state.audioUnlocked) {
+          console.warn('移动端音频未解锁，尝试解锁...');
+          await this.unlockAudio();
+      }
 
       try {
           this.state.isProcessing = true;
@@ -103,8 +122,13 @@ class TTSService {
           // 调用TTS API获取音频
           const audioBlob = await this._callTTSAPI(text, options);
           
-          // 播放音频
-          await this._playAudio(audioBlob);
+          // 保存音频文件到本地（如果启用）
+          if (this.config.saveAudioFiles) {
+              await this._saveAudioFile(audioBlob, text);
+          }
+          
+          // 播放音频（带重试机制）
+          await this._playAudioWithRetry(audioBlob, options.retries || 2);
 
       } catch (error) {
           console.error('TTS播放失败:', error);
@@ -257,12 +281,12 @@ class TTSService {
               type: audioBlob.type || '未设置MIME类型'
           });
           
-          // 为iOS Safari创建正确的音频Blob
+          // 为iOS Safari和Android创建正确的音频Blob
           let finalBlob = audioBlob;
-          if (this._isIOSDevice()) {
-              // iOS Safari需要正确的MIME类型
+          if (this._isMobileDevice()) {
+              // 移动端需要正确的MIME类型
               if (!audioBlob.type || audioBlob.type === 'application/octet-stream') {
-                  console.log('为iOS设备设置MP3 MIME类型');
+                  console.log('为移动设备设置MP3 MIME类型');
                   finalBlob = new Blob([audioBlob], { type: 'audio/mpeg' });
               }
           }
@@ -270,16 +294,51 @@ class TTSService {
           const audioUrl = URL.createObjectURL(finalBlob);
           const audio = new Audio(audioUrl);
 
-          // 设置音频属性
+          // 设置音频属性 - 参考audio_test.html最佳实践
           audio.volume = 1.0;
-          audio.preload = 'auto';
+          audio.preload = 'metadata'; // 移动端使用metadata更稳定
           
-          // iOS Safari特殊设置
-          if (this._isIOSDevice()) {
+          // 移动端特殊设置
+          if (this._isMobileDevice()) {
+              const browserInfo = this._getMobileBrowserInfo();
+              
               audio.setAttribute('playsinline', true);
               audio.setAttribute('webkit-playsinline', true);
               audio.crossOrigin = 'anonymous';
-              audio.preload = 'metadata'; // iOS上更稳定
+              
+              // iOS Safari特殊处理
+              if (browserInfo.isIOS) {
+                  audio.setAttribute('-webkit-user-select', 'none');
+                  audio.style.touchAction = 'manipulation';
+                  if (browserInfo.isSafari) {
+                      // Safari 特殊处理
+                      audio.muted = false;
+                      audio.loop = false;
+                      // iOS Safari 需要这个属性来避免播放问题
+                      audio.setAttribute('-webkit-appearance', 'none');
+                  }
+              }
+              
+              // Android特殊处理
+              if (browserInfo.isAndroid) {
+                  // Chrome for Android
+                  if (browserInfo.isChrome) {
+                      audio.preload = 'metadata';
+                  }
+                  // Samsung Browser
+                  if (browserInfo.isSamsung) {
+                      audio.preload = 'none';
+                  }
+              }
+              
+              // 微信内置浏览器特殊处理
+              if (browserInfo.isWechat) {
+                  audio.preload = 'metadata';
+                  audio.setAttribute('x5-video-player-type', 'h5');
+                  audio.setAttribute('x5-video-player-fullscreen', 'false');
+              }
+          } else {
+              audio.preload = 'auto';
           }
 
           // 播放完成事件
@@ -347,32 +406,59 @@ class TTSService {
               }
           };
 
-          // 音频加载完成
+          // 音频加载事件
+          audio.onloadedmetadata = () => {
+              console.log('音频元数据加载完成，时长:', audio.duration);
+          };
+          
           audio.oncanplaythrough = () => {
-              console.log('音频加载完成，开始播放');
+              console.log('音频缓冲完成，可以播放');
+          };
+          
+          // 移动端播放就绪事件
+          audio.oncanplay = () => {
+              if (this._isMobileDevice()) {
+                  console.log('移动端音频准备就绪');
+              }
           };
 
           // 开始播放
           this.state.currentAudio = audio;
           this.state.isSpeaking = true;
 
+          // 移动端播放处理
           const playPromise = audio.play();
           if (playPromise !== undefined) {
-              playPromise.catch(error => {
+              playPromise.then(() => {
+                  console.log('音频播放成功启动');
+              }).catch(error => {
                   this.state.isSpeaking = false;
                   this.state.currentAudio = null;
                   URL.revokeObjectURL(audioUrl);
                   
                   let errorMessage = `音频播放启动失败: ${error.message}`;
                   
-                  // iOS Safari特殊错误处理
-                  if (this._isIOSDevice()) {
-                      console.error('iOS播放失败:', error.name, error.message);
+                  // 移动端特殊错误处理
+                  if (this._isMobileDevice()) {
+                      const browserInfo = this._getMobileBrowserInfo();
+                      console.error('移动端播放失败:', error.name, error.message, browserInfo);
                       
                       if (error.name === 'NotAllowedError') {
-                          errorMessage += ' - iOS Safari阻止了音频播放，请点击页面任意位置后重试';
+                          if (browserInfo.isIOS && browserInfo.isSafari) {
+                              errorMessage += ' - iOS Safari阻止了音频播放，请点击页面任意位置后重试';
+                          } else if (browserInfo.isAndroid) {
+                              if (browserInfo.isChrome) {
+                                  errorMessage += ' - Chrome for Android阻止了音频播放，请在设置中允许自动播放';
+                              } else {
+                                  errorMessage += ' - Android浏览器阻止了音频播放，请允许自动播放或点击页面后重试';
+                              }
+                          } else if (browserInfo.isWechat) {
+                              errorMessage += ' - 微信内置浏览器需要用户交互后才能播放音频';
+                          }
+                          // 自动尝试解锁音频
+                          this.unlockAudio();
                       } else if (error.name === 'NotSupportedError') {
-                          errorMessage += ' - iOS Safari不支持此音频，已使用MP3格式但仍失败';
+                          errorMessage += ' - 移动端不支持此音频格式，已使用MP3格式但仍失败';
                       } else if (error.name === 'AbortError') {
                           errorMessage += ' - 播放被中止';
                       }
@@ -380,6 +466,9 @@ class TTSService {
                   
                   reject(new Error(errorMessage));
               });
+          } else {
+              // 旧版本浏览器兼容
+              console.log('音频播放启动（同步方式）');
           }
       });
   }
@@ -391,48 +480,67 @@ class TTSService {
   unlockAudio() {
       if (this.state.audioUnlocked) {
           console.log('音频已解锁');
-          return;
+          return Promise.resolve();
       }
       
-      try {
-          // 创建一个静音的短音频来解锁音频播放权限
-          const silentAudio = new Audio();
-          silentAudio.volume = 0;
-          silentAudio.preload = 'auto';
-          
-          // 创建一个极短的静音音频数据
-          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          const buffer = audioContext.createBuffer(1, 1, 22050);
-          const source = audioContext.createBufferSource();
-          source.buffer = buffer;
-          
-          // 播放静音音频来解锁
-          const promise = silentAudio.play();
-          if (promise) {
-              promise.then(() => {
-                  this.state.audioUnlocked = true;
-                  console.log('移动端音频播放权限已解锁');
-              }).catch(error => {
-                  console.warn('音频解锁失败，但这通常不影响后续播放:', error);
-                  this.state.audioUnlocked = true; // 即使失败也标记为已尝试
-              });
-          } else {
-              this.state.audioUnlocked = true;
-          }
-          
-          // 清理
-          setTimeout(() => {
-              silentAudio.pause();
-              silentAudio.currentTime = 0;
-              if (audioContext.state !== 'closed') {
-                  audioContext.close();
+      return new Promise((resolve) => {
+          try {
+              // 创建一个静音的短音频来解锁音频播放权限
+              const silentAudio = new Audio();
+              silentAudio.volume = 0;
+              silentAudio.muted = true;
+              
+              // 移动端特殊处理
+              if (this._isMobileDevice()) {
+                  const browserInfo = this._getMobileBrowserInfo();
+                  silentAudio.setAttribute('playsinline', true);
+                  silentAudio.setAttribute('webkit-playsinline', true);
+                  silentAudio.preload = 'metadata';
+                  
+                  // 微信特殊处理
+                  if (browserInfo.isWechat) {
+                      silentAudio.setAttribute('x5-video-player-type', 'h5');
+                  }
               }
-          }, 100);
-          
-      } catch (error) {
-          console.warn('音频解锁过程出错:', error);
-          this.state.audioUnlocked = true; // 标记为已尝试
-      }
+              
+              // 创建一个极短的空白音频数据URL
+              const emptyAudioData = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+              silentAudio.src = emptyAudioData;
+              
+              // 播放静音音频来解锁
+              const promise = silentAudio.play();
+              if (promise) {
+                  promise.then(() => {
+                      this.state.audioUnlocked = true;
+                      console.log('移动端音频播放权限已解锁');
+                      resolve();
+                  }).catch(error => {
+                      console.warn('音频解锁失败，但这通常不影响后续播放:', error);
+                      this.state.audioUnlocked = true; // 即使失败也标记为已尝试
+                      resolve();
+                  });
+              } else {
+                  this.state.audioUnlocked = true;
+                  resolve();
+              }
+              
+              // 清理
+              setTimeout(() => {
+                  try {
+                      silentAudio.pause();
+                      silentAudio.currentTime = 0;
+                      silentAudio.src = '';
+                  } catch (e) {
+                      // 忽略清理错误
+                  }
+              }, 200);
+              
+          } catch (error) {
+              console.warn('音频解锁过程出错:', error);
+              this.state.audioUnlocked = true; // 标记为已尝试
+              resolve();
+          }
+      });
   }
 
   /**
@@ -441,7 +549,37 @@ class TTSService {
    * @private
    */
   _isMobileDevice() {
-      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const userAgent = navigator.userAgent;
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+      const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      return isMobile || isTouch;
+  }
+  
+  /**
+   * 检测是否为Android设备
+   * @returns {boolean}
+   * @private
+   */
+  _isAndroidDevice() {
+      return /Android/i.test(navigator.userAgent);
+  }
+  
+  /**
+   * 获取移动端浏览器信息
+   * @returns {Object}
+   * @private
+   */
+  _getMobileBrowserInfo() {
+      const userAgent = navigator.userAgent;
+      return {
+          isIOS: this._isIOSDevice(),
+          isAndroid: this._isAndroidDevice(),
+          isSafari: /Safari/i.test(userAgent) && !/Chrome/i.test(userAgent),
+          isChrome: /Chrome/i.test(userAgent),
+          isFirefox: /Firefox/i.test(userAgent),
+          isSamsung: /SamsungBrowser/i.test(userAgent),
+          isWechat: /MicroMessenger/i.test(userAgent)
+      };
   }
 
   /**
@@ -451,6 +589,109 @@ class TTSService {
    */
   _isIOSDevice() {
       return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  }
+  
+  /**
+   * 设置移动端音频自动解锁
+   * @private
+   */
+  _setupMobileAudioUnlock() {
+      if (!this._isMobileDevice()) return;
+      
+      const unlockEvents = ['touchstart', 'touchend', 'click', 'tap'];
+      const unlockHandler = () => {
+          if (!this.state.audioUnlocked) {
+              this.unlockAudio().then(() => {
+                  console.log('移动端音频自动解锁完成');
+              });
+              // 移除事件监听器
+              unlockEvents.forEach(event => {
+                  document.removeEventListener(event, unlockHandler, true);
+              });
+          }
+      };
+      
+      // 添加事件监听器
+      unlockEvents.forEach(event => {
+          document.addEventListener(event, unlockHandler, { once: true, capture: true });
+      });
+      
+      const browserInfo = this._getMobileBrowserInfo();
+      console.log(`移动端音频自动解锁监听器已设置 - ${JSON.stringify(browserInfo)}`);
+  }
+  
+  /**
+   * 带重试机制的音频播放
+   * @param {Blob} audioBlob 音频数据
+   * @param {number} retries 重试次数
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _playAudioWithRetry(audioBlob, retries = 2) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+          try {
+              await this._playAudio(audioBlob);
+              return; // 播放成功，退出
+          } catch (error) {
+              console.warn(`音频播放失败 (第${attempt + 1}次尝试):`, error.message);
+              
+              // 如果是移动端权限问题，尝试解锁后重试
+              if (this._isMobileDevice() && (error.message.includes('NotAllowedError') || error.name === 'NotAllowedError')) {
+                  console.log('检测到移动端权限问题，尝试解锁音频...');
+                  await this.unlockAudio();
+                  // 稍等片刻再重试
+                  await new Promise(resolve => setTimeout(resolve, 300));
+              }
+              
+              // 如果是最后一次尝试，抛出错误
+              if (attempt === retries) {
+                  throw error;
+              }
+              
+              // 等待一段时间后重试
+              await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+          }
+      }
+  }
+
+  /**
+   * 保存音频文件到本地目录
+   * @param {Blob} audioBlob 音频数据
+   * @param {string} text 原始文本，用于生成文件名
+   * @private
+   */
+  async _saveAudioFile(audioBlob, text) {
+      try {
+          // 生成文件名（使用时间戳和文本的前20个字符）
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+          const textPreview = text.slice(0, 20).replace(/[^\w\s]/g, '').replace(/\s+/g, '_');
+          const fileName = `tts_${timestamp}_${textPreview}.mp3`;
+          
+          console.log('保存音频文件:', fileName);
+          
+          // 使用浏览器的下载功能保存文件
+          const url = URL.createObjectURL(audioBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          a.style.display = 'none';
+          
+          // 添加到DOM，点击下载，然后移除
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          
+          // 释放URL对象
+          setTimeout(() => {
+              URL.revokeObjectURL(url);
+          }, 100);
+          
+          console.log(`✅ 音频文件已保存: ${fileName}`);
+          
+      } catch (error) {
+          console.warn('保存音频文件失败:', error);
+          // 保存失败不影响播放，继续执行
+      }
   }
 
   /**

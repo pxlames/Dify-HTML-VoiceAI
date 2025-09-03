@@ -1,16 +1,14 @@
-/**
- * AI聊天助手 - 增强版
- * 支持实时语音对话、TTS播放控制、语音打断等功能
- */
 
 /**
  * 同步读取YAML文件并加载到Map中
+ * 注意：同步XHR会阻塞浏览器，不推荐在生产环境使用
  */
 function loadYamlToMapSync(yamlFilePath = 'config/total_config.yml') {
     const configMap = new Map();
     const xhr = new XMLHttpRequest();
     
     try {
+        // 同步请求（第三个参数为false）
         xhr.open('GET', yamlFilePath, false);
         xhr.send(null);
         
@@ -42,25 +40,24 @@ function loadYamlToMapSync(yamlFilePath = 'config/total_config.yml') {
     }
 }
 
-// API基础URL和TTS配置
+// API基础URL - 根据后端配置调整
 let API_BASE;
-let TTS_API_BASE;
-let TTS_API_TOKEN;
 
 // 同步初始化配置
 function initConfigSync() {
     const configMap = loadYamlToMapSync();
+    
     API_BASE = configMap.get('API_BASE');
-    TTS_API_BASE = configMap.get('TTS_API_BASE') || 'https://api.siliconflow.cn/v1/audio/speech';
-    TTS_API_TOKEN = configMap.get('TTS_API_TOKEN') || '';
 }
 
-initConfigSync();
+initConfigSync()
+
+console.log('1',API_BASE)
 
 // 全局变量
 let conversationId = '';
 let isLoading = false;
-let messageCount = 1;
+let messageCount = 1; // 初始欢迎消息
 
 // 语音录制变量
 let mediaRecorder = null;
@@ -72,29 +69,9 @@ let analyser = null;
 let silenceThreshold = 30;
 let silenceTimeout = 2000;
 
-// 实时语音对话变量
-let isVoiceModeActive = false;
-let continuousRecorder = null;
-let continuousStream = null;
-let isProcessingRealtime = false;
-let realtimeAudioChunks = [];
-let voiceActivityDetected = false;
-let voiceStartTime = null;
-let minimumSpeechDuration = 1000; // 最小语音时长1秒
-let maxSpeechDuration = 30000; // 最大语音时长30秒
-
-// TTS和音频播放变量
-let isTTSEnabled = true;
-let audioPlayer = null;
-let isPlayingAudio = false;
-let currentPlayingMessage = null;
-
-// 语音可视化变量
-let visualizerAnimationFrame = null;
-let waveBars = [];
-
 // 图表计数器
 let chartIdCounter = 0;
+
 
 // 配置marked.js
 marked.setOptions({
@@ -149,6 +126,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeChat() {
     const input = document.getElementById('messageInput');
     
+    // 检查必要元素是否存在
     if (!input) {
         console.error('找不到消息输入框元素');
         return;
@@ -160,36 +138,14 @@ function initializeChat() {
             e.preventDefault();
             sendMessage();
         } else if (e.key === 'Enter' && e.shiftKey) {
+            // Shift+Enter换行，自动调整高度
             setTimeout(() => autoResizeTextarea(input), 0);
         }
     });
 
     input.addEventListener('input', () => autoResizeTextarea(input));
     
-    // 🎧 初始化HTML5音频播放器 - 这是播放TTS音频的核心元素
-    audioPlayer = document.getElementById('audioPlayer');
-    if (audioPlayer) {
-        // 🔚 监听播放结束事件
-        audioPlayer.addEventListener('ended', onAudioPlayEnded);
-        // ❌ 监听播放错误事件  
-        audioPlayer.addEventListener('error', onAudioPlayError);
-    }
-    
-    // 🎛️ 初始化TTS语音播放开关控制
-    const ttsToggle = document.getElementById('ttsEnabled');
-    if (ttsToggle) {
-        isTTSEnabled = ttsToggle.checked;                           // 📖 读取初始开关状态
-        ttsToggle.addEventListener('change', function() {
-            isTTSEnabled = this.checked;                            // 🔄 更新全局TTS开关状态
-            updateStatus(isTTSEnabled ? '语音播放已开启' : '语音播放已关闭');
-            setTimeout(() => updateStatus(''), 2000);
-        });
-    }
-    
-    // 初始化语音可视化
-    initVoiceVisualizer();
-    
-    // 设置初始时间戳
+    // 设置初始时间戳 - 添加元素存在检查
     const timestampElement = document.querySelector('.timestamp');
     if (timestampElement) {
         timestampElement.textContent = formatTime(new Date());
@@ -197,14 +153,6 @@ function initializeChat() {
     
     // 检查语音支持
     checkAudioSupport();
-}
-
-// 初始化语音可视化
-function initVoiceVisualizer() {
-    const visualizer = document.getElementById('voiceVisualizer');
-    if (visualizer) {
-        waveBars = visualizer.querySelectorAll('.wave-bar');
-    }
 }
 
 // 自动调整文本框高度
@@ -223,6 +171,7 @@ async function checkAudioSupport() {
             throw new Error('浏览器不支持音频录制');
         }
         
+        // 检查浏览器是否支持MediaRecorder
         if (!window.MediaRecorder) {
             throw new Error('浏览器不支持MediaRecorder API');
         }
@@ -233,388 +182,18 @@ async function checkAudioSupport() {
         console.error('音频支持检查失败:', error);
         updateStatus('⚠️ 语音功能不可用: ' + error.message);
         
+        // 隐藏语音按钮而不是移除display
         const voiceButton = document.getElementById('voiceButton');
-        const voiceModeButton = document.getElementById('voiceModeButton');
-        
-        if (voiceButton) voiceButton.style.visibility = 'hidden';
-        if (voiceModeButton) voiceModeButton.style.visibility = 'hidden';
-    }
-}
-
-// ===================== 实时语音对话功能 =====================
-
-// 切换实时语音对话模式
-async function toggleVoiceMode() {
-    if (isLoading) {
-        updateStatus('请等待当前操作完成');
-        return;
-    }
-
-    if (isVoiceModeActive) {
-        await stopVoiceMode();
-    } else {
-        await startVoiceMode();
-    }
-}
-
-// 开启实时语音对话模式
-async function startVoiceMode() {
-    try {
-        updateStatus('正在启动实时语音对话模式...');
-        
-        // 🛑🎵 启动实时模式时停止当前播放的音频
-        if (isPlayingAudio && audioPlayer) {
-            audioPlayer.pause();                  // ⏸️ 暂停播放
-            audioPlayer.currentTime = 0;          // ⏮️ 重置到开头
-            isPlayingAudio = false;               // 🔄 重置状态
-        }
-        
-        // 获取音频流
-        continuousStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                sampleRate: 16000,
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            }
-        });
-        
-        // 设置音频分析器用于语音活动检测
-        if (audioContext && audioContext.state !== 'closed') {
-            await audioContext.close();
-        }
-        
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioContext.createMediaStreamSource(continuousStream);
-        analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        source.connect(analyser);
-        
-        // 创建连续录制器
-        const mimeTypes = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/mp4',
-            'audio/wav'
-        ];
-        
-        let selectedMimeType = 'audio/webm';
-        for (const mimeType of mimeTypes) {
-            if (MediaRecorder.isTypeSupported(mimeType)) {
-                selectedMimeType = mimeType;
-                break;
-            }
-        }
-        
-        continuousRecorder = new MediaRecorder(continuousStream, {
-            mimeType: selectedMimeType
-        });
-        
-        realtimeAudioChunks = [];
-        
-        continuousRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-                realtimeAudioChunks.push(event.data);
-            }
-        };
-        
-        continuousRecorder.onstop = () => {
-            if (realtimeAudioChunks.length > 0 && !isProcessingRealtime) {
-                processRealtimeAudio();
-            }
-        };
-        
-        // 开始录制
-        continuousRecorder.start();
-        isVoiceModeActive = true;
-        
-        // 开始语音活动检测
-        startVoiceActivityDetection();
-        
-        // 更新UI
-        updateVoiceModeUI(true);
-        updateStatus('🎙️ 实时语音对话模式已激活，可以随时说话');
-        
-        // 显示语音可视化
-        showVoiceVisualizer(true);
-        
-    } catch (error) {
-        console.error('启动实时语音对话失败:', error);
-        updateStatus('❌ 启动实时语音对话失败: ' + error.message);
-        await stopVoiceMode();
-    }
-}
-
-// 停止实时语音对话模式
-async function stopVoiceMode() {
-    try {
-        isVoiceModeActive = false;
-        
-        // 停止录制器
-        if (continuousRecorder && continuousRecorder.state !== 'inactive') {
-            continuousRecorder.stop();
-        }
-        
-        // 停止音频流
-        if (continuousStream) {
-            continuousStream.getTracks().forEach(track => track.stop());
-            continuousStream = null;
-        }
-        
-        // 关闭音频上下文
-        if (audioContext && audioContext.state !== 'closed') {
-            await audioContext.close();
-        }
-        
-        // 停止语音活动检测
-        if (visualizerAnimationFrame) {
-            cancelAnimationFrame(visualizerAnimationFrame);
-            visualizerAnimationFrame = null;
-        }
-        
-        // 更新UI
-        updateVoiceModeUI(false);
-        showVoiceVisualizer(false);
-        updateStatus('实时语音对话模式已关闭');
-        setTimeout(() => updateStatus(''), 2000);
-        
-        // 清理变量
-        continuousRecorder = null;
-        voiceActivityDetected = false;
-        voiceStartTime = null;
-        realtimeAudioChunks = [];
-        
-    } catch (error) {
-        console.error('停止实时语音对话失败:', error);
-    }
-}
-
-// 语音活动检测
-function startVoiceActivityDetection() {
-    if (!isVoiceModeActive || !analyser) return;
-    
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    const energyThreshold = 40; // 调整这个值来控制敏感度
-    const silenceDuration = 1500; // 静音持续时间1.5秒后处理
-    
-    function detectVoiceActivity() {
-        if (!isVoiceModeActive || !analyser) return;
-        
-        analyser.getByteFrequencyData(dataArray);
-        
-        // 计算音频能量
-        const sum = dataArray.reduce((a, b) => a + b, 0);
-        const average = sum / bufferLength;
-        
-        // 更新可视化
-        updateVoiceVisualizer(average);
-        
-        const now = Date.now();
-        
-        if (average > energyThreshold) {
-            // 检测到语音活动
-            if (!voiceActivityDetected) {
-                voiceActivityDetected = true;
-                voiceStartTime = now;
-                console.log('语音活动开始');
-                
-                // 重新开始录制以捕获完整的语音
-                if (continuousRecorder && continuousRecorder.state === 'recording') {
-                    continuousRecorder.stop();
-                    
-                    setTimeout(() => {
-                        if (isVoiceModeActive && continuousStream) {
-                            realtimeAudioChunks = [];
-                            continuousRecorder = new MediaRecorder(continuousStream, {
-                                mimeType: continuousRecorder.mimeType
-                            });
-                            continuousRecorder.ondataavailable = (event) => {
-                                if (event.data && event.data.size > 0) {
-                                    realtimeAudioChunks.push(event.data);
-                                }
-                            };
-                            continuousRecorder.onstop = () => {
-                                if (realtimeAudioChunks.length > 0 && !isProcessingRealtime) {
-                                    processRealtimeAudio();
-                                }
-                            };
-                            continuousRecorder.start();
-                        }
-                    }, 100);
-                }
-            }
-            
-            // 清除静音定时器
-            if (silenceTimer) {
-                clearTimeout(silenceTimer);
-                silenceTimer = null;
-            }
-            
-        } else if (voiceActivityDetected) {
-            // 在语音活动后检测到静音
-            if (!silenceTimer) {
-                silenceTimer = setTimeout(() => {
-                    if (voiceActivityDetected && isVoiceModeActive) {
-                        const speechDuration = now - voiceStartTime;
-                        
-                        if (speechDuration >= minimumSpeechDuration) {
-                            console.log(`语音活动结束，持续时间: ${speechDuration}ms`);
-                            
-                            // 停止当前录制并处理音频
-                            if (continuousRecorder && continuousRecorder.state === 'recording') {
-                                continuousRecorder.stop();
-                            }
-                            
-                            voiceActivityDetected = false;
-                            voiceStartTime = null;
-                        } else {
-                            console.log('语音持续时间太短，忽略');
-                            voiceActivityDetected = false;
-                            voiceStartTime = null;
-                        }
-                    }
-                    silenceTimer = null;
-                }, silenceDuration);
-            }
-        }
-        
-        // 防止语音过长
-        if (voiceActivityDetected && voiceStartTime && (now - voiceStartTime) > maxSpeechDuration) {
-            console.log('语音时长超过限制，强制处理');
-            if (continuousRecorder && continuousRecorder.state === 'recording') {
-                continuousRecorder.stop();
-            }
-            voiceActivityDetected = false;
-            voiceStartTime = null;
-        }
-        
-        if (isVoiceModeActive) {
-            visualizerAnimationFrame = requestAnimationFrame(detectVoiceActivity);
-        }
-    }
-    
-    detectVoiceActivity();
-}
-
-// 处理实时语音音频
-async function processRealtimeAudio() {
-    if (isProcessingRealtime || realtimeAudioChunks.length === 0) {
-        return;
-    }
-    
-    isProcessingRealtime = true;
-    
-    try {
-        updateStatus('正在处理语音...');
-        
-        // 🛑🎵 语音打断功能 - 用户说话时立即停止AI的语音播放！
-        if (isPlayingAudio && audioPlayer) {
-            audioPlayer.pause();                  // ⏸️ 暂停当前播放
-            audioPlayer.currentTime = 0;          // ⏮️ 重置播放位置到开头
-            isPlayingAudio = false;               // 🔄 重置播放状态标志
-            console.log('🎤➡️🔇 TTS播放被语音输入打断');
-        }
-        
-        const audioBlob = new Blob(realtimeAudioChunks, { type: 'audio/webm' });
-        
-        if (audioBlob.size === 0) {
-            console.log('音频文件为空，跳过处理');
-            return;
-        }
-        
-        if (audioBlob.size > 25 * 1024 * 1024) {
-            updateStatus('语音过长，请说话简短一些');
-            return;
-        }
-        
-        const formData = new FormData();
-        formData.append('audio', audioBlob, 'realtime.webm');
-        formData.append('language', 'auto');
-        
-        // 发送到语音转文字接口
-        const response = await fetch(`${API_BASE}/transcribe`, {
-            method: 'POST',
-            body: formData,
-            signal: AbortSignal.timeout(30000)
-        });
-        
-        if (!response.ok) {
-            throw new Error(`语音转文字失败 (${response.status})`);
-        }
-        
-        const data = await response.json();
-        
-        if (data.success && data.text && data.text.trim()) {
-            const transcribedText = data.text.trim();
-            console.log('实时语音识别结果:', transcribedText);
-            
-            // 添加用户消息并自动发送
-            addMessage(transcribedText, true);
-            messageCount++;
-            updateMessageCount();
-            
-            // 自动发送到AI
-            await sendMessageToAI(transcribedText);
-            
-        } else {
-            console.log('未识别到有效语音内容');
-        }
-        
-    } catch (error) {
-        console.error('处理实时语音失败:', error);
-        if (error.name !== 'AbortError') {
-            updateStatus('语音处理失败: ' + error.message);
-        }
-    } finally {
-        isProcessingRealtime = false;
-        realtimeAudioChunks = [];
-        
-        // 重新启动录制器以继续监听
-        if (isVoiceModeActive && continuousStream && !isLoading) {
-            setTimeout(async () => {
-                try {
-                    if (isVoiceModeActive && continuousStream) {
-                        continuousRecorder = new MediaRecorder(continuousStream, {
-                            mimeType: continuousRecorder.mimeType
-                        });
-                        
-                        continuousRecorder.ondataavailable = (event) => {
-                            if (event.data && event.data.size > 0) {
-                                realtimeAudioChunks.push(event.data);
-                            }
-                        };
-                        
-                        continuousRecorder.onstop = () => {
-                            if (realtimeAudioChunks.length > 0 && !isProcessingRealtime) {
-                                processRealtimeAudio();
-                            }
-                        };
-                        
-                        continuousRecorder.start();
-                        updateStatus('🎙️ 继续监听语音输入...');
-                    }
-                } catch (error) {
-                    console.error('重新启动录制器失败:', error);
-                }
-            }, 500);
+        if (voiceButton) {
+            voiceButton.style.visibility = 'hidden';
         }
     }
 }
 
-// ===================== 普通语音录制功能 =====================
-
-// 普通语音录制
+// 语音录制功能
 async function startRecording() {
-    // 如果实时语音模式开启，先关闭
-    if (isVoiceModeActive) {
-        await stopVoiceMode();
-        await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    
     try {
+        // 清理之前的录制状态
         if (audioContext && audioContext.state === 'running') {
             await audioContext.close();
         }
@@ -628,6 +207,7 @@ async function startRecording() {
             } 
         });
         
+        // 检查支持的MIME类型
         const mimeTypes = [
             'audio/webm;codecs=opus',
             'audio/webm',
@@ -666,7 +246,7 @@ async function startRecording() {
             updateStatus('❌ 录音过程中发生错误');
         };
         
-        // 音频分析器
+        // 音频分析器 - 添加错误处理
         try {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const source = audioContext.createMediaStreamSource(stream);
@@ -675,6 +255,7 @@ async function startRecording() {
             source.connect(analyser);
         } catch (audioError) {
             console.warn('音频分析器初始化失败:', audioError);
+            // 不阻断录音功能，只是没有静音检测
         }
         
         mediaRecorder.start(100);
@@ -714,8 +295,8 @@ function stopRecording() {
 }
 
 function toggleRecording() {
-    if (isLoading || isVoiceModeActive) {
-        updateStatus(isVoiceModeActive ? '实时对话模式下无需手动录音' : '请等待当前操作完成');
+    if (isLoading) {
+        updateStatus('请等待当前操作完成');
         return;
     }
     
@@ -726,7 +307,7 @@ function toggleRecording() {
     }
 }
 
-// 静音检测（普通录音）
+// 静音检测
 function startSilenceDetection() {
     if (!analyser || !isRecording) return;
     
@@ -767,7 +348,7 @@ function startSilenceDetection() {
     }
 }
 
-// 处理普通录音音频
+// 处理录音音频
 async function processAudio() {
     if (audioChunks.length === 0) {
         updateRecordingUI(false);
@@ -785,11 +366,12 @@ async function processAudio() {
 
             const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             
+            // 检查音频文件大小
             if (audioBlob.size === 0) {
                 throw new Error('音频文件为空');
             }
             
-            if (audioBlob.size > 25 * 1024 * 1024) {
+            if (audioBlob.size > 25 * 1024 * 1024) { // 25MB限制
                 throw new Error('音频文件过大，请录制较短的语音');
             }
             
@@ -797,9 +379,11 @@ async function processAudio() {
             formData.append('audio', audioBlob, 'recording.webm');
             formData.append('language', 'auto');
 
+            // 添加超时控制
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
 
+            // 发送到后端的语音转文字接口
             const response = await fetch(`${API_BASE}/transcribe`, {
                 method: 'POST',
                 body: formData,
@@ -822,6 +406,7 @@ async function processAudio() {
                     autoResizeTextarea(input);
                     updateStatus('语音转换完成');
                     
+                    // 自动发送消息
                     setTimeout(() => {
                         sendMessage();
                     }, 500);
@@ -841,13 +426,14 @@ async function processAudio() {
                 throw new Error('语音处理超时，请重试');
             }
             
+            // 网络错误重试
             if (retryCount < maxRetries && (
                 error.message.includes('Failed to fetch') || 
                 error.message.includes('Network') ||
                 error.message.includes('timeout')
             )) {
                 retryCount++;
-                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // 递增延迟
                 return attemptTranscription();
             }
             
@@ -863,66 +449,6 @@ async function processAudio() {
         updateRecordingUI(false);
         audioChunks = [];
     }
-}
-
-// ===================== UI更新函数 =====================
-
-// 更新实时语音模式UI
-function updateVoiceModeUI(active) {
-    const voiceModeButton = document.getElementById('voiceModeButton');
-    const voiceModeIcon = document.getElementById('voiceModeIcon');
-    const voiceStatus = document.getElementById('voiceStatus');
-    const realtimeIndicator = document.getElementById('realtimeIndicator');
-    const inputHints = document.querySelectorAll('.voice-hint, .realtime-hint');
-    
-    if (voiceModeButton) {
-        voiceModeButton.className = active ? 'voice-mode-button active' : 'voice-mode-button';
-    }
-    
-    if (voiceModeIcon) {
-        voiceModeIcon.textContent = active ? '🔴' : '🎙️';
-    }
-    
-    if (voiceStatus) {
-        voiceStatus.textContent = active ? '语音模式: 实时对话' : '语音模式: 关闭';
-    }
-    
-    if (realtimeIndicator) {
-        realtimeIndicator.style.display = active ? 'flex' : 'none';
-    }
-    
-    // 更新提示信息
-    inputHints.forEach(hint => {
-        if (hint.classList.contains('voice-hint')) {
-            hint.style.display = active ? 'none' : 'block';
-        } else if (hint.classList.contains('realtime-hint')) {
-            hint.style.display = active ? 'block' : 'none';
-        }
-    });
-}
-
-// 显示/隐藏语音可视化
-function showVoiceVisualizer(show) {
-    const visualizer = document.getElementById('voiceVisualizer');
-    if (visualizer) {
-        visualizer.style.display = show ? 'flex' : 'none';
-    }
-}
-
-// 更新语音可视化
-function updateVoiceVisualizer(audioLevel) {
-    if (!waveBars || waveBars.length === 0) return;
-    
-    const normalizedLevel = Math.min(audioLevel / 100, 1);
-    const barCount = waveBars.length;
-    
-    waveBars.forEach((bar, index) => {
-        const height = Math.random() * normalizedLevel * 40 + 5;
-        const delay = index * 0.1;
-        bar.style.height = height + 'px';
-        bar.style.animationDelay = delay + 's';
-        bar.style.backgroundColor = normalizedLevel > 0.3 ? '#4CAF50' : '#ddd';
-    });
 }
 
 // 更新录音UI状态
@@ -948,7 +474,7 @@ function updateRecordingUI(recording, processing = false) {
                 </div>
             `;
         }
-        if (voiceHint && !isVoiceModeActive) {
+        if (voiceHint) {
             voiceHint.classList.add('show');
             voiceHint.textContent = '正在录音，2秒静音后自动发送...';
         }
@@ -957,7 +483,7 @@ function updateRecordingUI(recording, processing = false) {
         if (voiceIcon) {
             voiceIcon.innerHTML = '<div class="loading-spinner"></div>';
         }
-        if (voiceHint && !isVoiceModeActive) {
+        if (voiceHint) {
             voiceHint.classList.add('show');
             voiceHint.textContent = '正在处理语音...';
         }
@@ -972,11 +498,10 @@ function updateRecordingUI(recording, processing = false) {
     }
 }
 
-// ===================== 发送消息功能 =====================
-
-// 发送消息
+// 发送消息功能
 async function sendMessage() {
     const input = document.getElementById('messageInput');
+    const sendButton = document.getElementById('sendButton');
     
     if (!input) {
         console.error('找不到输入框元素');
@@ -999,11 +524,6 @@ async function sendMessage() {
     messageCount++;
     updateMessageCount();
     
-    await sendMessageToAI(message);
-}
-
-// 发送消息到AI
-async function sendMessageToAI(message) {
     // 显示AI思考状态
     showTypingIndicator();
     
@@ -1012,8 +532,9 @@ async function sendMessageToAI(message) {
     
     async function attemptSendMessage() {
         try {
+            // 添加超时控制
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
             
             const response = await fetch(`${API_BASE}/chat`, {
                 method: 'POST',
@@ -1040,6 +561,7 @@ async function sendMessageToAI(message) {
         } catch (error) {
             console.error('发送消息失败:', error);
             
+            // 网络错误重试逻辑
             if (retryCount < maxRetries && (
                 error.name === 'AbortError' ||
                 error.message.includes('Failed to fetch') ||
@@ -1053,6 +575,8 @@ async function sendMessageToAI(message) {
             }
             
             hideTypingIndicator();
+            
+            // 添加错误消息
             addMessage(`❌ 发送失败: ${error.message}`, false);
             updateStatus('消息发送失败');
         }
@@ -1063,8 +587,7 @@ async function sendMessageToAI(message) {
     } finally {
         setInputsEnabled(true);
         isLoading = false;
-        const input = document.getElementById('messageInput');
-        if (input && !isVoiceModeActive) {
+        if (input) {
             input.focus();
         }
     }
@@ -1118,11 +641,6 @@ async function handleStreamResponse(response) {
                                 updateMessageContent(assistantMessage, finalAnswer, true);
                                 messageCount++;
                                 updateMessageCount();
-                                
-                                // 自动播放TTS (如果开启)
-                                if (isTTSEnabled && finalAnswer.trim()) {
-                                    await playTTS(finalAnswer, assistantMessage);
-                                }
                             }
                             updateStatus('回答完成');
                             setTimeout(() => updateStatus(''), 2000);
@@ -1152,140 +670,6 @@ async function handleStreamResponse(response) {
     }
 }
 
-// ========================================================================================
-// 🔊🔊🔊 TTS音频播放核心功能区域 - 这里是所有音频播放的关键代码！🔊🔊🔊
-// ========================================================================================
-
-// 🎵 主要TTS播放函数 - 将文字转换为语音并播放
-async function playTTS(text, messageElement) {
-    // 🚫 检查播放条件：TTS开关、文本内容、API令牌
-    if (!isTTSEnabled || !text.trim() || !TTS_API_TOKEN) {
-        return;
-    }
-    
-    try {
-        // 🛑 如果正在播放其他音频，先停止当前播放
-        if (isPlayingAudio && audioPlayer) {
-            audioPlayer.pause();
-            audioPlayer.currentTime = 0;
-        }
-        
-        updateStatus('正在生成语音...');
-        
-        // 🌐 调用TTS API生成语音
-        const response = await fetch(TTS_API_BASE, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${TTS_API_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'fnlp/MOSS-TTSD-v0.5',  // 🤖 使用的TTS模型
-                input: text,                    // 📝 要转换的文字
-                voice: 'female-1',             // 🎤 语音类型（女声）
-                speed: 1.0                     // ⚡ 播放速度
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`TTS服务错误: ${response.status}`);
-        }
-        
-        // 🎧 获取音频文件并创建播放URL
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
-        // 🎯 设置HTML音频播放器并开始播放
-        if (audioPlayer) {
-            audioPlayer.src = audioUrl;                    // 📍 设置音频源
-            currentPlayingMessage = messageElement;         // 🎯 记录当前播放的消息
-            isPlayingAudio = true;                         // 🔄 更新播放状态
-            
-            // 🎨 更新消息上的播放按钮显示状态
-            updateMessageAudioButton(messageElement, 'playing');
-            
-            // 🎵 开始播放音频！
-            audioPlayer.play();
-            updateStatus('🔊 正在播放语音');
-        }
-        
-    } catch (error) {
-        console.error('TTS播放失败:', error);
-        updateStatus('语音播放失败');
-        setTimeout(() => updateStatus(''), 2000);
-    }
-}
-
-// 🎮 手动播放消息音频 - 点击消息旁的播放按钮时调用
-async function playMessageAudio(button) {
-    const messageElement = button.closest('.message');
-    if (!messageElement || !isTTSEnabled) return;
-    
-    const messageContent = messageElement.querySelector('.message-content');
-    if (!messageContent) return;
-    
-    // 📝 提取纯文本内容（去除时间戳）
-    const textContent = messageContent.textContent.replace(/\d{2}:\d{2}:\d{2}$/, '').trim();
-    
-    if (textContent) {
-        // 🎵 调用主播放函数
-        await playTTS(textContent, messageElement);
-    }
-}
-
-// 🔚 音频播放结束事件处理 - 当音频播放完毕时自动触发
-function onAudioPlayEnded() {
-    isPlayingAudio = false;                                         // 🔄 重置播放状态
-    if (currentPlayingMessage) {
-        updateMessageAudioButton(currentPlayingMessage, 'idle');    // 🎨 恢复按钮状态
-        currentPlayingMessage = null;                               // 🧹 清除当前播放记录
-    }
-    updateStatus('');                                               // 🧹 清除状态提示
-    
-    // 🗑️ 清理音频URL资源，释放内存
-    if (audioPlayer && audioPlayer.src.startsWith('blob:')) {
-        URL.revokeObjectURL(audioPlayer.src);
-    }
-}
-
-// ❌ 音频播放错误事件处理 - 当音频播放出现问题时触发
-function onAudioPlayError() {
-    isPlayingAudio = false;                                         // 🔄 重置播放状态
-    if (currentPlayingMessage) {
-        updateMessageAudioButton(currentPlayingMessage, 'error');   // 🎨 显示错误状态
-        currentPlayingMessage = null;                               // 🧹 清除当前播放记录
-    }
-    updateStatus('语音播放出错');                                    // ⚠️ 显示错误提示
-    setTimeout(() => updateStatus(''), 2000);                      // ⏰ 2秒后清除提示
-}
-
-// 更新消息音频按钮状态
-function updateMessageAudioButton(messageElement, state) {
-    const button = messageElement.querySelector('.play-audio-btn');
-    if (!button) return;
-    
-    switch (state) {
-        case 'playing':
-            button.textContent = '⏸️';
-            button.title = '暂停播放';
-            break;
-        case 'idle':
-            button.textContent = '🔊';
-            button.title = '播放语音';
-            break;
-        case 'error':
-            button.textContent = '❌';
-            button.title = '播放失败';
-            setTimeout(() => {
-                button.textContent = '🔊';
-                button.title = '播放语音';
-            }, 2000);
-            break;
-    }
-}
-
-// ===================== 消息处理函数 =====================
-
 // 更新消息内容
 function updateMessageContent(messageElement, content, isComplete = false) {
     if (!messageElement) {
@@ -1309,21 +693,12 @@ function updateMessageContent(messageElement, content, isComplete = false) {
                 ${renderedContent}
                 <div class="timestamp">${formatTime(new Date())}</div>
             `;
-            
-            // 添加音频播放按钮
-            const messageControls = messageElement.querySelector('.message-controls');
-            if (!messageControls) {
-                const controls = document.createElement('div');
-                controls.className = 'message-controls';
-                controls.innerHTML = '<button class="play-audio-btn" onclick="playMessageAudio(this)" title="播放语音">🔊</button>';
-                messageElement.appendChild(controls);
-            }
         } else {
             contentDiv.innerHTML = renderedContent;
         }
     } catch (error) {
         console.error('更新消息内容失败:', error);
-        contentDiv.textContent = content;
+        contentDiv.textContent = content; // 降级到纯文本
     }
     
     // 自动滚动
@@ -1336,9 +711,9 @@ function updateMessageContent(messageElement, content, isComplete = false) {
 // 辅助函数：判断内容是否包含Markdown语法
 function hasMarkdownSyntax(content) {
     const markdownPatterns = [
-        /^#{1,6}\s/m,        // 标题
-        /^>\s/m,             // 引用
-        /^[*-]\s/m,          // 列表
+        /^#{1,6}\s/,         // 标题
+        /^>\s/,              // 引用
+        /^[*-]\s/,           // 列表
         /`[^`]+`/,           // 代码
         /\*\*[^*]+\*\*/,     // 粗体
         /\*[^*]+\*/,         // 斜体
@@ -1412,15 +787,9 @@ function addMessage(content, isUser, showTimestamp = true, isStreaming = false) 
         </div>
     `;
     
-    // 为助手消息添加音频播放控制
-    if (!isUser && !isStreaming) {
-        const controls = document.createElement('div');
-        controls.className = 'message-controls';
-        controls.innerHTML = '<button class="play-audio-btn" onclick="playMessageAudio(this)" title="播放语音">🔊</button>';
-        messageDiv.appendChild(controls);
-    }
-    
     messagesContainer.appendChild(messageDiv);
+    
+    // 自动滚动到底部
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     
     return messageDiv;
@@ -1431,6 +800,7 @@ function showTypingIndicator() {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) return;
     
+    // 移除已有的输入指示器
     hideTypingIndicator();
     
     const indicator = document.createElement('div');
@@ -1457,8 +827,6 @@ function hideTypingIndicator() {
     }
 }
 
-// ===================== 工具函数 =====================
-
 // 格式化时间
 function formatTime(date) {
     return date.toLocaleTimeString('zh-CN', {
@@ -1473,7 +841,6 @@ function setInputsEnabled(enabled) {
     const input = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
     const voiceButton = document.getElementById('voiceButton');
-    const voiceModeButton = document.getElementById('voiceModeButton');
     
     if (input) {
         input.disabled = !enabled;
@@ -1484,12 +851,8 @@ function setInputsEnabled(enabled) {
         sendButton.innerHTML = enabled ? '➤' : '<div class="loading-spinner"></div>';
     }
     
-    if (voiceButton && !isVoiceModeActive) {
+    if (voiceButton) {
         voiceButton.disabled = !enabled;
-    }
-    
-    if (voiceModeButton) {
-        voiceModeButton.disabled = !enabled;
     }
 }
 
@@ -1510,32 +873,20 @@ function updateStatus(text) {
 }
 
 // 清空对话
-async function clearConversation() {
+function clearConversation() {
     if (!confirm('确定要清空所有对话记录吗？此操作不可撤销。')) {
         return;
     }
     
     try {
-        // 停止实时语音模式
-        if (isVoiceModeActive) {
-            await stopVoiceMode();
-        }
-        
-        // 停止普通录音
+        // 停止任何正在进行的录音
         if (isRecording) {
             stopRecording();
         }
         
-        // 停止音频播放
-        if (isPlayingAudio && audioPlayer) {
-            audioPlayer.pause();
-            audioPlayer.currentTime = 0;
-            isPlayingAudio = false;
-        }
-        
         // 清理音频资源
         if (audioContext && audioContext.state === 'running') {
-            await audioContext.close();
+            audioContext.close();
         }
         
         const messagesContainer = document.getElementById('chatMessages');
@@ -1543,11 +894,8 @@ async function clearConversation() {
             messagesContainer.innerHTML = `
                 <div class="message assistant">
                     <div class="message-content">
-                        你好！我是AI智能助手，可以帮你解答问题、分析数据、生成图表等。你可以通过文字输入、语音输入或开启实时语音对话与我交流。
+                        你好！我是AI智能助手，可以帮你解答问题、分析数据、生成图表等。你可以通过文字输入或语音输入与我交流。
                         <div class="timestamp">${formatTime(new Date())}</div>
-                    </div>
-                    <div class="message-controls">
-                        <button class="play-audio-btn" onclick="playMessageAudio(this)" title="播放语音">🔊</button>
                     </div>
                 </div>
             `;
@@ -1557,7 +905,6 @@ async function clearConversation() {
         conversationId = '';
         messageCount = 1;
         isLoading = false;
-        currentPlayingMessage = null;
         
         const conversationIdElement = document.getElementById('conversationId');
         if (conversationIdElement) {
@@ -1568,6 +915,7 @@ async function clearConversation() {
         updateStatus('对话已清空');
         setTimeout(() => updateStatus(''), 2000);
         
+        // 重新启用输入控件
         setInputsEnabled(true);
         
     } catch (error) {

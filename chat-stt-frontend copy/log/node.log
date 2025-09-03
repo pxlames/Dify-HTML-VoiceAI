@@ -7,8 +7,8 @@
     ├── index.html（首页）
     ├── css/style.css（样式文件）
     └── js/script.js（脚本文件）
-[2025-09-03T14:23:04.582Z] GET /chat_frontend_v1.html
-[2025-09-03T14:23:04.871Z] GET /script_v1.js
-[2025-09-03T14:23:05.718Z] GET /config/total_config.yml
-[2025-09-03T14:23:06.557Z] GET /content.css.map
-[2025-09-03T14:23:06.593Z] GET /sidebar.css.map
+[2025-09-03T13:04:23.404Z] GET /chat_frontend.html
+[2025-09-03T13:04:23.603Z] GET /tts_service.js
+[2025-09-03T13:04:23.676Z] GET /script.js
+[2025-09-03T13:04:25.512Z] GET /content.css.map
+[2025-09-03T13:04:25.553Z] GET /sidebar.css.map

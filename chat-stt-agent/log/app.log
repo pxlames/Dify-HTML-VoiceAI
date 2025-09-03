@@ -33760,3 +33760,77 @@ INFO:__main__:删除临时文件: /tmp/tmpia89_8vc.wav
 INFO:     104.193.9.181:0 - "POST /transcribe HTTP/1.1" 200 OK
 INFO:__main__:转发对话请求: query=你好你好。😔..., conversation_id=e44eae2b-4c57-430b-9562-9bed7ff0f8ad
 INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=2..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:接收音频: recording.webm, 大小: 20447B, 临时路径: /tmp/tmpv_72pr4w.wav
+
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s][A
+{'load_data': '0.010', 'extract_feat': '0.004', 'forward': '0.035', 'batch_size': '1', 'rtf': '0.028'}, : 100%|[34m██████████[0m| 1/1 [00:00<00:00, 28.46it/s][A
+rtf_avg: 0.028: 100%|[34m██████████[0m| 1/1 [00:00<00:00, 28.24it/s]                                                                                          [Artf_avg: 0.028: 100%|[34m██████████[0m| 1/1 [00:00<00:00, 27.84it/s]
+
+  0%|[31m          [0m| 0/1 [00:00<?, ?it/s][AINFO:root:decoding, utt: tmpv_72pr4w, empty speech
+  0%|[31m          [0m| 0/1 [00:00<?, ?it/s]
+INFO:__main__:识别完成: ...
+INFO:__main__:删除临时文件: /tmp/tmpv_72pr4w.wav
+INFO:     104.193.9.181:0 - "POST /transcribe HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=nih..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=nih..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:接收音频: realtime.webm, 大小: 10787B, 临时路径: /tmp/tmpm_v0ub2z.wav
+
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s][A
+{'load_data': '0.006', 'extract_feat': '0.003', 'forward': '0.026', 'batch_size': '1', 'rtf': '0.040'}, : 100%|[34m██████████[0m| 1/1 [00:00<00:00, 38.70it/s][A
+rtf_avg: 0.040: 100%|[34m██████████[0m| 1/1 [00:00<00:00, 38.38it/s]                                                                                          [Artf_avg: 0.040: 100%|[34m██████████[0m| 1/1 [00:00<00:00, 37.77it/s]
+
+  0%|[31m          [0m| 0/1 [00:00<?, ?it/s][AINFO:root:decoding, utt: tmpm_v0ub2z, empty speech
+  0%|[31m          [0m| 0/1 [00:00<?, ?it/s]
+INFO:__main__:识别完成: ...
+INFO:__main__:删除临时文件: /tmp/tmpm_v0ub2z.wav
+INFO:     104.193.9.181:0 - "POST /transcribe HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:接收音频: audio.webm, 大小: 103523B, 临时路径: /tmp/tmppfd8aaeh.wav
+
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s][A
+100%|[34m██████████[0m| 1/1 [00:00<00:00,  9.51it/s][A
+{'load_data': '0.045', 'extract_feat': '0.007', 'forward': '0.105', 'batch_size': '1', 'rtf': '0.016'}, : 100%|[34m██████████[0m| 1/1 [00:00<00:00,  9.51it/s][A
+rtf_avg: 0.016: 100%|[34m██████████[0m| 1/1 [00:00<00:00,  9.51it/s]                                                                                          [Artf_avg: 0.016: 100%|[34m██████████[0m| 1/1 [00:00<00:00,  9.39it/s]
+
+  0%|[31m          [0m| 0/1 [00:00<?, ?it/s][A
+
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s][A[A
+
+100%|[34m██████████[0m| 1/1 [00:00<00:00,  8.50it/s][A[A
+
+{'load_data': '0.000', 'extract_feat': '0.003', 'forward': '0.118', 'batch_size': '1', 'rtf': '0.075'}, : 100%|[34m██████████[0m| 1/1 [00:00<00:00,  8.50it/s][A[A
+
+rtf_avg: 0.075: 100%|[34m██████████[0m| 1/1 [00:00<00:00,  8.50it/s]                                                                                          [A[Artf_avg: 0.075: 100%|[34m██████████[0m| 1/1 [00:00<00:00,  8.44it/s]
+
+100%|[31m██████████[0m| 1/1 [00:00<00:00,  6.75it/s][A
+rtf_avg: 0.019, time_speech:  6.420, time_escape: 0.123: 100%|[31m██████████[0m| 1/1 [00:00<00:00,  6.75it/s][Artf_avg: 0.019, time_speech:  6.420, time_escape: 0.123: 100%|[31m██████████[0m| 1/1 [00:00<00:00,  6.73it/s]
+INFO:__main__:识别完成: 你好，小布同学。...
+INFO:__main__:删除临时文件: /tmp/tmppfd8aaeh.wav
+INFO:     104.193.9.181:0 - "POST /transcribe HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好，小布同学。..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=nihao..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:     104.193.9.181:0 - "OPTIONS /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=你好..., conversation_id=
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK
+INFO:__main__:转发对话请求: query=告诉我你是谁..., conversation_id=29fa3cf7-ad3b-41b0-bb1c-3f5e84f29f7c
+INFO:     104.193.9.181:0 - "POST /chat HTTP/1.1" 200 OK

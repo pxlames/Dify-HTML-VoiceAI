@@ -7,8 +7,10 @@
     ├── index.html（首页）
     ├── css/style.css（样式文件）
     └── js/script.js（脚本文件）
-[2025-09-03T14:23:04.582Z] GET /chat_frontend_v1.html
-[2025-09-03T14:23:04.871Z] GET /script_v1.js
-[2025-09-03T14:23:05.718Z] GET /config/total_config.yml
-[2025-09-03T14:23:06.557Z] GET /content.css.map
-[2025-09-03T14:23:06.593Z] GET /sidebar.css.map
+[2025-09-03T15:02:32.920Z] GET /chat_frontend_v1.html
+[2025-09-03T15:02:33.154Z] GET /script_v1.js
+[2025-09-03T15:02:33.340Z] GET /style_v1.css
+[2025-09-03T15:02:35.801Z] GET /config/total_config.yml
+[2025-09-03T15:02:37.623Z] GET /content.css.map
+[2025-09-03T15:02:37.997Z] GET /sidebar.css.map
+[2025-09-03T15:02:45.392Z] GET /favicon.ico

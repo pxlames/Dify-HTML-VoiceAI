@@ -4,4 +4,4 @@ author: developer
 apiToken: sk-mfvgxdishgetqlikzayseblbqwbgbfhnmzxybxlnedrfafwy
 API_BASE: https://5668c18.r10.cpolar.top
 dify_voice_apikey: app-O61DY12Hr1Gm9MFBPle9sMj5
-# TTS_API_TOKEN: sk-mfvgxdishgetqlikzayseblbqwbgbfhnmzxybxlnedrfafwy
+TTS_API_TOKEN: sk-mfvgxdishgetqlikzayseblbqwbgbfhnmzxybxlnedrfafwy

@@ -1172,6 +1172,8 @@ async function playTTS(text, messageElement) {
         
         updateStatus('正在生成语音...');
         
+        console.log(TTS_API_TOKEN)
+
         // 🌐 调用TTS API生成语音
         const response = await fetch(TTS_API_BASE, {
             method: 'POST',
@@ -1180,15 +1182,17 @@ async function playTTS(text, messageElement) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'fnlp/MOSS-TTSD-v0.5',  // 🤖 使用的TTS模型
-                input: text,                    // 📝 要转换的文字
-                voice: 'female-1',             // 🎤 语音类型（女声）
-                speed: 1.0                     // ⚡ 播放速度
+                model: 'fnlp/MOSS-TTSD-v0.5',      // 🤖 使用SiliconFlow支持的TTS模型  
+                input: text,                         // 📝 要转换的文字
+                voice: 'fnlp/MOSS-TTSD-v0.5:anna', // 🎤 系统预定义语音
+                response_format: 'mp3'               // 🎧 音频格式
             })
         });
         
         if (!response.ok) {
-            throw new Error(`TTS服务错误: ${response.status}`);
+            const errorData = await response.text();
+            console.error('TTS API错误响应:', errorData);
+            throw new Error(`TTS服务错误 (${response.status}): ${errorData}`);
         }
         
         // 🎧 获取音频文件并创建播放URL

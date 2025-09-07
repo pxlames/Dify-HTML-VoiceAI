@@ -918,17 +918,17 @@ function startVoiceDetection() {
                                              volume > effectiveThreshold;
                     
                     if (isHighQualityVoice) {
-                        state.shouldInterrupt = true;
-                        state.interruptTimestamp = Date.now();
+                    state.shouldInterrupt = true;
+                    state.interruptTimestamp = Date.now();
                         console.log('🎤 检测到高质量语音，准备中断当前进程...', {
-                            volume: volume.toFixed(3),
+                        volume: volume.toFixed(3),
                             effectiveThreshold: effectiveThreshold.toFixed(3),
                             voicePresence: voiceFreqRange.voicePresence.toFixed(3),
                             noiseRatio: voiceFreqRange.noiseRatio.toFixed(3),
-                            isProcessing: state.isProcessing,
-                            isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
-                            consecutiveFrames: consecutiveVoiceFrames
-                        });
+                        isProcessing: state.isProcessing,
+                        isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
+                        consecutiveFrames: consecutiveVoiceFrames
+                    });
                     } else {
                         console.log('🔇 检测到声音但质量不足，忽略中断请求', {
                             volume: volume.toFixed(3),

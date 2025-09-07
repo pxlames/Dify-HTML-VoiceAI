@@ -1,0 +1,245 @@
+app:
+  description: ''
+  icon: ski
+  icon_background: '#FFEAD5'
+  mode: advanced-chat
+  name: voice_agent
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        image_file_size_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: true
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      autoPlay: enabled
+      enabled: true
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        sourceType: llm
+        targetType: answer
+      id: 1756541224857-source-answer-target
+      source: '1756541224857'
+      sourceHandle: source
+      target: answer
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        sourceType: start
+        targetType: llm
+      id: 1756378359707-source-1756541224857-target
+      source: '1756378359707'
+      sourceHandle: source
+      target: '1756541224857'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: 开始
+        type: start
+        variables: []
+      height: 54
+      id: '1756378359707'
+      position:
+        x: 78
+        y: 282
+      positionAbsolute:
+        x: 78
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#1756541224857.text#}}'
+        desc: ''
+        selected: false
+        title: 直接回复
+        type: answer
+        variables: []
+      height: 103
+      id: answer
+      position:
+        x: 983.6324139081596
+        y: 282
+      positionAbsolute:
+        x: 983.6324139081596
+        y: 282
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: true
+            size: 10
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: deepseek-ai/DeepSeek-V3
+          provider: siliconflow
+        prompt_template:
+        - id: c4fedce6-2ea2-467c-bc63-8bc797297b2a
+          role: system
+          text: '你是小普播报助手，根据用户问题来生成一个播报声音的内容，要求简洁温和，不要回复无关内容。
+
+
+            ## 设定
+
+            你支持历史记忆。
+
+            如果用户问题与你的背景资料有关，优先使用背景资料回复用户问题。
+
+
+            ## 回复语气
+
+            * 模仿AI播报人员，给用户真实的体验感觉。
+
+            * 字数不要太多，既丰富又凝练核心，根据问题难易自动调整回复的字数。
+
+            * 如果用户问题要求详细回答/详细介绍，则需要尽可能多的回复用户，全面分析问题回答。
+
+
+            # 回复时可以参考的开场白，其他的也可以。
+
+            1. 你好呀，很高兴为您解答～……
+
+            2. 哎呀，我没有这个功能呢，换个简单点的问题把～……
+
+
+
+            # 背景资料
+
+            **小普 - 新天普实验室智能助手：**
+
+            我是小普，新天普实验室开发的专业生物化学实验室智能助手。我被专门设计用于安装在实验室的中央台和通风柜上，随时为研究人员提供支持。
+
+
+            **我的能力：**
+
+            实验方案设计与优化
+
+            实验步骤指导与疑难解答
+
+            实验安全与材料处理建议
+
+            研究数据分析与解读
+
+            相关文献检索与整合
+
+            实验室设备操作指导
+
+
+            **我的优势:**
+
+            实时响应：无需离开实验台即可获取帮助
+
+            专业知识：基于最新生物化学研究成果
+
+            场景适应：针对不同类型实验提供定制化建议
+
+            安全保障：强调实验室安全，提供紧急处理方案
+
+            学习成长：持续更新知识库，适应新技术和方法
+
+
+            作为实验室的得力助手，我可以帮助研究人员解决各种实际问题，从简单的试剂配比到复杂的实验设计，从而提高实验效率、降低失误率，让研究工作更加顺利进行。
+
+            我期待与您在实验室中的合作，一起探索科学的奥秘！
+
+            合设定的关键词在实验过程中生成具象化的实验流程图。（需要销售结合实际分析客户可能想要的数据处理以及图表形式）
+
+            5.提供特定解决方案：询问具体问题时，根据当前实验室预设情况提供特定解决方案。
+
+            6.设备使用流程和仪器校准建议：提供实验室常用仪器的详细操作步骤；提供精密仪器校准的标准操作步骤。
+
+            7.仪器参数设置建议和故障诊断：根据实验需求，推荐仪器的最佳工作参数；协助识别常见仪器故障原因并提供解决方案。
+
+            8.化学品数据库和安全操作指导：即时查询化学品危险特性、储存条件和处理方法；提供特定化学品的安全处理流程与注意事项。
+
+            9.采购计划辅助：根据实验计划，预测试剂需求量。'
+        - id: ce79ab1a-b981-46fe-99cd-7cbea5640a53
+          role: user
+          text: 用户的问题：{{#sys.query#}}
+        selected: false
+        title: LLM 2
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 98
+      id: '1756541224857'
+      position:
+        x: 582.8985755742976
+        y: 282
+      positionAbsolute:
+        x: 582.8985755742976
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: -1594.2648278163192
+      y: -229
+      zoom: 2

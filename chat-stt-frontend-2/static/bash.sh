@@ -20,7 +20,7 @@ for port in "${PORTS[@]}"; do
 done
 
 # 定义文件夹变量
-PROJECT_DIR="/home/bygpu/Documents/chat-stt-frontend"
+PROJECT_DIR="/home/bygpu/Documents/chat-stt-frontend-2"
 # PROJECT_DIR="/Users/pangxiaolong/project/pythonLearn/Dify-HTML-VoiceAI/chat-stt-frontend"
 
 # 执行命令

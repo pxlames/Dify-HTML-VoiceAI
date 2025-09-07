@@ -83,9 +83,23 @@ function initConfigSync() {
         QUESTION_DELAY: 1000, // 检测到声音后，如果持续静音超过此时长，则自动结束录音并提问
         VOICE_DETECTION_INTERVAL: 1, // 声音活动检测的轮询间隔（毫秒）
         VOICE_START_DELAY: 100, // (未使用) 曾用于检测到声音后延迟开始录音
+        // 噪声过滤配置
+        NOISE_FILTER: {
+            enabled: true, // 启用噪声过滤
+            noiseFloor: 0.01, // 噪声底噪阈值
+            voiceFreqMin: 300, // 语音最低频率 (Hz)
+            voiceFreqMax: 3400, // 语音最高频率 (Hz)
+            noiseFreqMin: 4000, // 噪声检测起始频率 (Hz)
+            smoothingFactor: 0.7, // 音量平滑系数
+            adaptiveThreshold: true, // 启用自适应阈值
+            minThreshold: 0.1, // 最小阈值
+            maxThreshold: 0.4, // 最大阈值
+            voicePresenceThreshold: 0.3, // 语音存在概率阈值
+            noiseRatioThreshold: 0.4 // 噪声比例阈值
+        },
         TTS: {  // 文本转语音（Text-to-Speech）服务的相关配置
             apiToken: apiToken, // TTS服务的API令牌
-            voice: 'fnlp/MOSS-TTSD-v0.5:anna', // 使用的语音模型
+            voice: 'FunAudioLLM/CosyVoice2-0.5B:alex', // 使用的语音模型
             enabled: true, // 是否启用TTS功能
             timeout: 30000, // TTS请求的超时时间
             speed: 2.5 // 语速控制
@@ -423,19 +437,57 @@ async function initializeAudio() {
             audio: {
                 echoCancellation: true, // 开启回声消除
                 noiseSuppression: true, // 开启噪声抑制
+                autoGainControl: true, // 开启自动增益控制
                 channelCount: 1,  // 请求单声道
-                sampleRate: 16000 // 请求16kHz采样率，这是语音识别常用标准
+                sampleRate: 16000, // 请求16kHz采样率，这是语音识别常用标准
+                sampleSize: 16, // 16位采样深度
+                latency: 0.01 // 低延迟模式
             } 
         });
 
         // 创建音频上下文
         state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // 创建音频预处理链
+        const source = state.audioContext.createMediaStreamSource(stream);
+        
+        // 创建高通滤波器，去除低频噪声
+        const highPassFilter = state.audioContext.createBiquadFilter();
+        highPassFilter.type = 'highpass';
+        highPassFilter.frequency.setValueAtTime(80, state.audioContext.currentTime); // 80Hz截止频率
+        highPassFilter.Q.setValueAtTime(1, state.audioContext.currentTime);
+        
+        // 创建低通滤波器，去除高频噪声
+        const lowPassFilter = state.audioContext.createBiquadFilter();
+        lowPassFilter.type = 'lowpass';
+        lowPassFilter.frequency.setValueAtTime(8000, state.audioContext.currentTime); // 8kHz截止频率
+        lowPassFilter.Q.setValueAtTime(1, state.audioContext.currentTime);
+        
+        // 创建动态范围压缩器，减少音量波动
+        const compressor = state.audioContext.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-24, state.audioContext.currentTime);
+        compressor.knee.setValueAtTime(30, state.audioContext.currentTime);
+        compressor.ratio.setValueAtTime(12, state.audioContext.currentTime);
+        compressor.attack.setValueAtTime(0.003, state.audioContext.currentTime);
+        compressor.release.setValueAtTime(0.25, state.audioContext.currentTime);
+        
         // 创建分析器节点，用于音量检测和可视化
         state.analyser = state.audioContext.createAnalyser();
-        // 创建媒体流源节点
-        const source = state.audioContext.createMediaStreamSource(stream);
-        // 将音频源连接到分析器
-        source.connect(state.analyser);
+        
+        // 连接音频处理链：源 -> 高通滤波 -> 低通滤波 -> 压缩器 -> 分析器
+        source.connect(highPassFilter);
+        highPassFilter.connect(lowPassFilter);
+        lowPassFilter.connect(compressor);
+        compressor.connect(state.analyser);
+        
+        // 保存处理链引用，用于后续清理
+        state.audioProcessingChain = {
+            source: source,
+            highPassFilter: highPassFilter,
+            lowPassFilter: lowPassFilter,
+            compressor: compressor,
+            analyser: state.analyser
+        };
 
         // 初始化自定义的音频缓冲区
         state.audioBuffer = new AudioBuffer();
@@ -661,8 +713,134 @@ window.clearConversation = function() {
 };
 
 /**
+ * 噪声过滤和音量处理函数
+ * @param {number} rawVolume - 原始音量值
+ * @param {Uint8Array} frequencyData - 频率数据
+ * @returns {number} - 处理后的音量值
+ */
+function processVolumeWithNoiseFilter(rawVolume, frequencyData) {
+    // 如果噪声过滤未启用，直接返回原始音量
+    if (!CONFIG.NOISE_FILTER.enabled) {
+        return rawVolume;
+    }
+    
+    // 1. 动态噪声底噪检测
+    if (!state.noiseFloor) state.noiseFloor = CONFIG.NOISE_FILTER.noiseFloor;
+    if (!state.volumeHistory) state.volumeHistory = [];
+    
+    // 更新音量历史
+    state.volumeHistory.push(rawVolume);
+    if (state.volumeHistory.length > 10) {
+        state.volumeHistory.shift();
+    }
+    
+    // 计算平均噪声底噪（使用历史数据的最小值）
+    const minVolume = Math.min(...state.volumeHistory);
+    state.noiseFloor = Math.max(0.005, minVolume * 0.8); // 噪声底噪为最小音量的80%
+    
+    // 2. 频率分析 - 检测语音特征频率
+    const voiceFreqRange = analyzeVoiceFrequency(frequencyData);
+    
+    // 3. 音量平滑处理
+    const smoothedVolume = smoothVolume(rawVolume);
+    
+    // 4. 噪声抑制
+    const noiseSuppressedVolume = Math.max(0, smoothedVolume - state.noiseFloor);
+    
+    // 5. 语音特征增强
+    const voiceEnhancedVolume = noiseSuppressedVolume * voiceFreqRange.voicePresence;
+    
+    // 6. 动态阈值调整
+    if (CONFIG.NOISE_FILTER.adaptiveThreshold) {
+        updateAdaptiveThreshold(voiceEnhancedVolume);
+    }
+    
+    return voiceEnhancedVolume;
+}
+
+/**
+ * 分析语音特征频率
+ * @param {Uint8Array} frequencyData - 频率数据
+ * @returns {Object} - 包含语音特征的对象
+ */
+function analyzeVoiceFrequency(frequencyData) {
+    const sampleRate = 16000; // 假设采样率为16kHz
+    const binCount = frequencyData.length;
+    const binSize = sampleRate / (binCount * 2); // 每个bin的频率范围
+    
+    // 使用配置中的频率范围
+    const voiceStartBin = Math.floor(CONFIG.NOISE_FILTER.voiceFreqMin / binSize);
+    const voiceEndBin = Math.floor(CONFIG.NOISE_FILTER.voiceFreqMax / binSize);
+    const noiseStartBin = Math.floor(CONFIG.NOISE_FILTER.noiseFreqMin / binSize);
+    
+    let voiceEnergy = 0;
+    let noiseEnergy = 0;
+    let totalEnergy = 0;
+    
+    for (let i = 0; i < binCount; i++) {
+        const energy = frequencyData[i] / 255;
+        totalEnergy += energy;
+        
+        if (i >= voiceStartBin && i <= voiceEndBin) {
+            voiceEnergy += energy;
+        } else if (i >= noiseStartBin) {
+            noiseEnergy += energy;
+        }
+    }
+    
+    // 计算语音存在概率
+    const voicePresence = voiceEnergy / Math.max(totalEnergy, 0.001);
+    const noiseRatio = noiseEnergy / Math.max(totalEnergy, 0.001);
+    
+    return {
+        voicePresence: Math.min(1, voicePresence * 2), // 增强语音信号
+        noiseRatio: noiseRatio,
+        isVoice: voicePresence > CONFIG.NOISE_FILTER.voicePresenceThreshold && 
+                 noiseRatio < CONFIG.NOISE_FILTER.noiseRatioThreshold
+    };
+}
+
+/**
+ * 音量平滑处理
+ * @param {number} volume - 当前音量
+ * @returns {number} - 平滑后的音量
+ */
+function smoothVolume(volume) {
+    if (!state.smoothedVolume) state.smoothedVolume = volume;
+    
+    // 使用配置中的平滑系数
+    const smoothingFactor = CONFIG.NOISE_FILTER.smoothingFactor;
+    state.smoothedVolume = smoothingFactor * state.smoothedVolume + (1 - smoothingFactor) * volume;
+    
+    return state.smoothedVolume;
+}
+
+/**
+ * 更新自适应阈值
+ * @param {number} volume - 当前音量
+ */
+function updateAdaptiveThreshold(volume) {
+    if (!state.adaptiveThreshold) state.adaptiveThreshold = CONFIG.VOICE_DETECTION_THRESHOLD;
+    
+    // 如果音量持续较低，降低阈值
+    if (volume < state.adaptiveThreshold * 0.5) {
+        state.adaptiveThreshold = Math.max(
+            CONFIG.NOISE_FILTER.minThreshold,
+            state.adaptiveThreshold * 0.98
+        );
+    }
+    // 如果音量较高，适当提高阈值
+    else if (volume > state.adaptiveThreshold * 2) {
+        state.adaptiveThreshold = Math.min(
+            CONFIG.NOISE_FILTER.maxThreshold,
+            state.adaptiveThreshold * 1.02
+        );
+    }
+}
+
+/**
  * 连续声音活动检测的核心循环 (优化版)
- * @description 这是语音助手的“耳朵”。它不断分析麦克风输入音量，
+ * @description 这是语音助手的"耳朵"。它不断分析麦克风输入音量，
  *              以决定何时开始录音、何时停止录音，以及何时中断助手的讲话。
  */
 function startVoiceDetection() {
@@ -673,14 +851,31 @@ function startVoiceDetection() {
     const VOICE_CONFIRM_FRAMES = 3; // 需要连续多少帧有声音才确认用户开始说话
     const SILENCE_CONFIRM_FRAMES = Math.ceil(CONFIG.QUESTION_DELAY / CONFIG.VOICE_DETECTION_INTERVAL); // 对应2秒静音的帧数
     
+    // 噪声过滤相关变量
+    let noiseFloor = 0.01; // 噪声底噪，动态调整
+    let volumeHistory = []; // 音量历史，用于平滑和噪声检测
+    const HISTORY_LENGTH = 10; // 保留最近10帧的历史
+    let adaptiveThreshold = CONFIG.VOICE_DETECTION_THRESHOLD; // 自适应阈值
+    let lastSignificantVolume = 0; // 最后一次显著音量
+    let noiseDetectionFrames = 0; // 噪声检测帧数
+    
     const checkVoiceLevel = () => {
         if (!state.continuousMonitoring) return; // 如果监听停止，则退出循环
         
         // 从AnalyserNode获取频率数据来计算当前音量
         const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
         state.analyser.getByteFrequencyData(dataArray);
+        
+        // 计算基础音量
         const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
-        const volume = average / 255; // 归一化到0-1范围
+        const rawVolume = average / 255; // 归一化到0-1范围
+        
+        // 噪声过滤和音量平滑处理
+        const processedVolume = processVolumeWithNoiseFilter(rawVolume, dataArray);
+        const volume = processedVolume; // 使用处理后的音量
+        
+        // 获取语音特征分析结果
+        const voiceFreqRange = analyzeVoiceFrequency(dataArray);
         
         // 检查是否需要执行中断
         if (state.shouldInterrupt && (state.isProcessing || (state.ttsService && state.ttsService.isSpeaking()))) {
@@ -694,8 +889,12 @@ function startVoiceDetection() {
             executeGlobalInterrupt();
         }
         
-        // --- 声音检测逻辑 ---
-        if (volume > CONFIG.VOICE_DETECTION_THRESHOLD) {
+        // --- 增强的声音检测逻辑 ---
+        // 使用自适应阈值和语音特征检测
+        const effectiveThreshold = state.adaptiveThreshold || CONFIG.VOICE_DETECTION_THRESHOLD;
+        const isVoiceDetected = volume > effectiveThreshold && voiceFreqRange.isVoice;
+        
+        if (isVoiceDetected) {
             // 检测到声音
             consecutiveVoiceFrames++;
             consecutiveSilenceFrames = 0; // 重置静音帧计数
@@ -704,20 +903,40 @@ function startVoiceDetection() {
             if (consecutiveVoiceFrames === 1) {
                 if (!state.voiceStartTime) {
                     state.voiceStartTime = Date.now(); // 记录声音开始的时间戳，用于预缓冲
-                    console.log('检测到声音开始...');
+                    console.log('检测到声音开始...', {
+                        volume: volume.toFixed(3),
+                        voicePresence: voiceFreqRange.voicePresence.toFixed(3),
+                        noiseRatio: voiceFreqRange.noiseRatio.toFixed(3)
+                    });
                 }
                 
-                // 如果此时助手正在说话或处理，设置中断意图
+                // 防噪声打断机制：只有在确认是语音且不是噪声时才设置中断意图
                 if (state.isProcessing || (state.ttsService && state.ttsService.isSpeaking())) {
-                    state.shouldInterrupt = true;
-                    state.interruptTimestamp = Date.now();
-                    console.log('🎤 检测到声音，准备中断当前进程...', {
-                        volume: volume.toFixed(3),
-                        threshold: CONFIG.VOICE_DETECTION_THRESHOLD,
-                        isProcessing: state.isProcessing,
-                        isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
-                        consecutiveFrames: consecutiveVoiceFrames
-                    });
+                    // 增加语音质量检查 - 优化阈值判断
+                    const isHighQualityVoice = voiceFreqRange.voicePresence > 0.3 && 
+                                             voiceFreqRange.noiseRatio < 0.4 && 
+                                             volume > effectiveThreshold;
+                    
+                    if (isHighQualityVoice) {
+                        state.shouldInterrupt = true;
+                        state.interruptTimestamp = Date.now();
+                        console.log('🎤 检测到高质量语音，准备中断当前进程...', {
+                            volume: volume.toFixed(3),
+                            effectiveThreshold: effectiveThreshold.toFixed(3),
+                            voicePresence: voiceFreqRange.voicePresence.toFixed(3),
+                            noiseRatio: voiceFreqRange.noiseRatio.toFixed(3),
+                            isProcessing: state.isProcessing,
+                            isTTSSpeaking: state.ttsService ? state.ttsService.isSpeaking() : false,
+                            consecutiveFrames: consecutiveVoiceFrames
+                        });
+                    } else {
+                        console.log('🔇 检测到声音但质量不足，忽略中断请求', {
+                            volume: volume.toFixed(3),
+                            voicePresence: voiceFreqRange.voicePresence.toFixed(3),
+                            noiseRatio: voiceFreqRange.noiseRatio.toFixed(3),
+                            isHighQuality: isHighQualityVoice
+                        });
+                    }
                 }
             }
             
@@ -756,8 +975,14 @@ function startVoiceDetection() {
         // 随机输出调试信息，避免刷屏
         if (Math.random() < 0.01) { // 约1%的概率输出
             console.log('声音检测状态:', {
-                volume: volume.toFixed(3),
-                threshold: CONFIG.VOICE_DETECTION_THRESHOLD,
+                rawVolume: rawVolume.toFixed(3),
+                processedVolume: volume.toFixed(3),
+                effectiveThreshold: effectiveThreshold.toFixed(3),
+                adaptiveThreshold: state.adaptiveThreshold?.toFixed(3),
+                noiseFloor: state.noiseFloor?.toFixed(3),
+                voicePresence: voiceFreqRange.voicePresence.toFixed(3),
+                noiseRatio: voiceFreqRange.noiseRatio.toFixed(3),
+                isVoice: voiceFreqRange.isVoice,
                 consecutiveVoice: consecutiveVoiceFrames,
                 consecutiveSilence: consecutiveSilenceFrames,
                 isRecording: state.isRecording,
@@ -1482,8 +1707,100 @@ window.getSystemStatus = function() {
         shouldInterrupt: state.shouldInterrupt,
         isInterrupted: state.isInterrupted,
         voiceThreshold: CONFIG.VOICE_DETECTION_THRESHOLD,
+        adaptiveThreshold: state.adaptiveThreshold,
         lastVolume: state.lastVolume,
+        noiseFloor: state.noiseFloor,
+        smoothedVolume: state.smoothedVolume,
         hasAudioBuffer: !!state.audioBuffer,
-        hasCurrentStreamReader: !!state.currentStreamReader
+        hasCurrentStreamReader: !!state.currentStreamReader,
+        noiseFilterEnabled: CONFIG.NOISE_FILTER.enabled,
+        audioProcessingChain: !!state.audioProcessingChain
+    });
+};
+
+/**
+ * 切换噪声过滤功能
+ */
+window.toggleNoiseFilter = function() {
+    if (CONFIG.NOISE_FILTER) {
+        CONFIG.NOISE_FILTER.enabled = !CONFIG.NOISE_FILTER.enabled;
+        console.log('噪声过滤功能:', CONFIG.NOISE_FILTER.enabled ? '已启用' : '已禁用');
+        
+        // 重置相关状态
+        if (CONFIG.NOISE_FILTER.enabled) {
+            state.noiseFloor = CONFIG.NOISE_FILTER.noiseFloor;
+            state.volumeHistory = [];
+            state.smoothedVolume = null;
+            state.adaptiveThreshold = CONFIG.VOICE_DETECTION_THRESHOLD;
+        }
+        
+        showError(`噪声过滤功能已${CONFIG.NOISE_FILTER.enabled ? '启用' : '禁用'}`);
+    }
+};
+
+/**
+ * 调整噪声过滤参数
+ * @param {Object} params - 要调整的参数
+ */
+window.adjustNoiseFilter = function(params) {
+    if (!CONFIG.NOISE_FILTER) return;
+    
+    Object.keys(params).forEach(key => {
+        if (CONFIG.NOISE_FILTER.hasOwnProperty(key)) {
+            CONFIG.NOISE_FILTER[key] = params[key];
+            console.log(`噪声过滤参数 ${key} 已更新为:`, params[key]);
+        }
+    });
+    
+    showError('噪声过滤参数已更新');
+};
+
+/**
+ * 获取当前噪声过滤状态
+ */
+window.getNoiseFilterStatus = function() {
+    console.log('🔧 噪声过滤状态:', {
+        enabled: CONFIG.NOISE_FILTER.enabled,
+        noiseFloor: state.noiseFloor,
+        adaptiveThreshold: state.adaptiveThreshold,
+        smoothedVolume: state.smoothedVolume,
+        volumeHistory: state.volumeHistory?.length || 0,
+        config: CONFIG.NOISE_FILTER
+    });
+};
+
+/**
+ * 调试当前音频分析结果
+ */
+window.debugCurrentAudio = function() {
+    if (!state.analyser) {
+        console.log('❌ 音频分析器未初始化');
+        return;
+    }
+    
+    const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
+    state.analyser.getByteFrequencyData(dataArray);
+    
+    const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+    const rawVolume = average / 255;
+    const processedVolume = processVolumeWithNoiseFilter(rawVolume, dataArray);
+    const voiceFreqRange = analyzeVoiceFrequency(dataArray);
+    const effectiveThreshold = state.adaptiveThreshold || CONFIG.VOICE_DETECTION_THRESHOLD;
+    
+    const isHighQualityVoice = voiceFreqRange.voicePresence > 0.3 && 
+                             voiceFreqRange.noiseRatio < 0.4 && 
+                             processedVolume > effectiveThreshold;
+    
+    console.log('🎵 当前音频分析结果:', {
+        rawVolume: rawVolume.toFixed(3),
+        processedVolume: processedVolume.toFixed(3),
+        effectiveThreshold: effectiveThreshold.toFixed(3),
+        voicePresence: voiceFreqRange.voicePresence.toFixed(3),
+        noiseRatio: voiceFreqRange.noiseRatio.toFixed(3),
+        isVoice: voiceFreqRange.isVoice,
+        isHighQuality: isHighQualityVoice,
+        volumeCheck: `${processedVolume.toFixed(3)} > ${effectiveThreshold.toFixed(3)} = ${(processedVolume > effectiveThreshold)}`,
+        voicePresenceCheck: `${voiceFreqRange.voicePresence.toFixed(3)} > 0.3 = ${(voiceFreqRange.voicePresence > 0.3)}`,
+        noiseRatioCheck: `${voiceFreqRange.noiseRatio.toFixed(3)} < 0.4 = ${(voiceFreqRange.noiseRatio < 0.4)}`
     });
 };

@@ -1,0 +1,30 @@
+静态文件服务器运行在 http://localhost:8002
+静态文件目录: /home/bygpu/Documents/chat-stt-frontend-2/static
+
+推荐文件结构:
+├── server.js（当前文件）
+└── static/（静态资源目录）
+    ├── index.html（首页）
+    ├── css/style.css（样式文件）
+    └── js/script.js（脚本文件）
+[2025-09-07T08:52:00.070Z] GET /chat_frontend.html
+[2025-09-07T08:52:00.663Z] GET /tts_service.js
+[2025-09-07T08:52:00.750Z] GET /script.js
+[2025-09-07T08:52:01.882Z] GET /config/total_config.yml
+[2025-09-07T08:52:03.291Z] GET /content.css.map
+[2025-09-07T08:52:03.345Z] GET /sidebar.css.map
+[2025-09-07T08:52:18.427Z] GET /favicon.ico
+[2025-09-07T08:52:53.319Z] GET /chat_frontend.html
+[2025-09-07T08:52:53.927Z] GET /tts_service.js
+[2025-09-07T08:52:55.862Z] GET /content.css.map
+[2025-09-07T08:52:55.980Z] GET /sidebar.css.map
+[2025-09-07T08:54:32.285Z] GET /favicon.ico
+[2025-09-07T08:56:32.004Z] GET /chat_frontend.html
+[2025-09-07T08:56:32.252Z] GET /tts_service.js
+[2025-09-07T08:56:32.334Z] GET /script.js
+[2025-09-07T08:56:32.531Z] GET /config/total_config.yml
+[2025-09-07T08:56:33.150Z] GET /favicon.ico
+[2025-09-07T08:58:54.109Z] GET /chat_frontend.html
+[2025-09-07T08:58:54.429Z] GET /script.js
+[2025-09-07T08:58:54.525Z] GET /tts_service.js
+[2025-09-07T09:06:33.043Z] GET /

@@ -7,7 +7,7 @@ class TTSService {
       this.config = {
           apiToken: config.apiToken || '',
           apiUrl: 'https://api.siliconflow.cn/v1/audio/speech',
-          model: 'fnlp/MOSS-TTSD-v0.5',
+          model: 'FunAudioLLM/CosyVoice2-0.5B',
           voice: config.voice || 'female-1',
           enabled: config.enabled !== true, // 默认启用
           timeout: config.timeout || 30000, // 30秒超时
@@ -122,10 +122,10 @@ class TTSService {
           // 调用TTS API获取音频
           const audioBlob = await this._callTTSAPI(text, options);
           
-          // 保存音频文件到本地（如果启用）
-          if (this.config.saveAudioFiles) {
-              await this._saveAudioFile(audioBlob, text);
-          }
+        //   // 保存音频文件到本地（如果启用）
+        //   if (this.config.saveAudioFiles) {
+        //       await this._saveAudioFile(audioBlob, text);
+        //   }
           
           // 播放音频（带重试机制）
           await this._playAudioWithRetry(audioBlob, options.retries || 2);
